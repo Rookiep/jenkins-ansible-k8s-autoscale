@@ -1,36 +1,55 @@
 pipeline {
-    agent {
-        docker {
-            image 'python:3.9-alpine'
-            args '-v /var/run/docker.sock:/var/run/docker.sock' // Only if you need Docker inside
-        }
-    }
+    agent any
     
     stages {
-        stage('Clone Repository') {
+        stage('Clean Workspace') {
             steps {
-                git branch: 'main',
-                    url: 'https://github.com/Rookiep/jenkins-ansible-k8s-autoscale.git'
+                cleanWs()
             }
         }
         
-        stage('Install Ansible') {
+        stage('Clone Repository') {
+            steps {
+                git branch: 'main', 
+                url: 'https://github.com/Rookiep/jenkins-ansible-k8s-autoscale.git'
+            }
+        }
+        
+        stage('Install Python & Dependencies') {
             steps {
                 sh '''
+                    echo "=== CHECKING CURRENT ENVIRONMENT ==="
+                    whoami
+                    pwd
+                    ls -la
+                    
+                    echo "=== INSTALLING PYTHON3 AND PIP ==="
+                    apt-get update
+                    apt-get install -y python3 python3-pip
+                    
                     echo "=== INSTALLING ANSIBLE ==="
-                    pip install ansible
+                    pip3 install ansible
+                '''
+            }
+        }
+        
+        stage('Verify Installation') {
+            steps {
+                sh '''
+                    echo "=== VERIFYING INSTALLATIONS ==="
+                    python3 --version
+                    pip3 --version
                     ansible --version
                 '''
             }
         }
         
-        stage('Run Ansible Node Recovery Demo') {
+        stage('Run Ansible Playbook') {
             steps {
                 sh '''
-                    echo "=== RUNNING ANSIBLE NODE RECOVERY DEMO ==="
-                    # Test that Ansible is working
-                    ansible --version
-                    echo "Ansible installed successfully - ready for node recovery automation"
+                    echo "=== RUNNING ANSIBLE PLAYBOOK ==="
+                    cd /var/jenkins_home/workspace/jenkins-ansible-k8s-autoscale
+                    ansible-playbook -i inventory playbooks/node-recovery-demo.yml --check
                 '''
             }
         }
@@ -38,16 +57,13 @@ pipeline {
     
     post {
         always {
-            echo "🎉 JENKINS ANSIBLE AUTOMATION VERIFIED!"
-            echo "✅ Repository cloned successfully"
-            echo "✅ Ansible installed and configured"
-            echo "✅ Ready for production deployment"
+            echo "🎉 JENKINS ANSIBLE AUTOMATION COMPLETED!"
         }
         success {
-            echo "✅ PIPELINE EXECUTED SUCCESSFULLY!"
+            echo "✅ SUCCESS - Pipeline executed successfully"
         }
         failure {
-            echo "❌ PIPELINE FAILED - Check installation steps"
+            echo "❌ PIPELINE FAILED - Check specific stage for errors"
         }
     }
 }
