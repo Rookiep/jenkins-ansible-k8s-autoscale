@@ -40,7 +40,7 @@ pipeline {
             steps {
                 sh '''
                     echo "=== Running Ansible Playbook ==="
-                    export PATH=/var/jenkins_home/python/bin:$PATH
+                    cd jenkins-ansible-k8s-autoscale
                     ansible-playbook -i inventory.ini playbook.yml
                 '''
             }
