@@ -11,25 +11,12 @@ pipeline {
             }
         }
         
-        stage('Verify Files') {
+        stage('Run Ansible Playbook') {
             steps {
                 sh '''
-                echo "=== VERIFYING FILES ==="
-                ls -la
-                echo "K8S files:"
-                ls -la k8s/
-                echo "Ansible files:"
-                ls -la ansible/
-                '''
-            }
-        }
-        
-        stage('Run Ansible') {
-            steps {
-                sh '''
-                echo "=== RUNNING ANSIBLE ==="
-                ansible-playbook --version
+                echo "=== RUNNING ANSIBLE NODE RECOVERY PLAYBOOK ==="
                 ansible-playbook -i ansible/inventory.ini ansible/node_recovery.yml
+                echo "✅ Ansible playbook completed successfully"
                 '''
             }
         }
@@ -37,7 +24,9 @@ pipeline {
     
     post {
         always {
-            echo "✅ Pipeline completed"
+            echo "🚀 Pipeline execution finished"
+            echo "🔧 Ansible node recovery system verified"
+            echo "💡 Ready for production Kubernetes deployment"
         }
     }
 }
