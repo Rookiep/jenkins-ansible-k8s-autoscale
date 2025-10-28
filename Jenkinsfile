@@ -4,7 +4,7 @@ pipeline {
   stages {
     stage('Checkout') {
       steps {
-        git 'https://github.com/<your-username>/jenkins-ansible-k8s-autoscale.git'
+        git 'https://github.com/Rookiep/jenkins-ansible-k8s-autoscale.git'
       }
     }
 
