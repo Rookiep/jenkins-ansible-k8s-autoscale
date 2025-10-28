@@ -1,20 +1,20 @@
 pipeline {
     agent any
-    
+
     stages {
         stage('Clean Workspace') {
             steps {
                 cleanWs()
             }
         }
-        
+
         stage('Clone Repository') {
             steps {
                 git branch: 'main', 
-                url: 'https://github.com/Rookiep/jenkins-ansible-k8s-autoscale.git'
+                    url: 'https://github.com/Rookiep/jenkins-ansible-k8s-autoscale.git'
             }
         }
-        
+
         stage('Explore Repository Structure') {
             steps {
                 sh '''
@@ -30,7 +30,7 @@ pipeline {
                 '''
             }
         }
-        
+
         stage('Install Standalone Python') {
             steps {
                 sh '''
@@ -43,7 +43,7 @@ pipeline {
                 '''
             }
         }
-        
+
         stage('Install Ansible') {
             steps {
                 sh '''
@@ -60,46 +60,25 @@ pipeline {
                 '''
             }
         }
-        
-        stage('Run Correct Ansible Playbook') {
+
+        stage('Run Node Recovery Playbook') {
             steps {
                 sh '''
-                    echo "=== RUNNING ANSIBLE PLAYBOOK ==="
+                    echo "=== RUNNING NODE RECOVERY PLAYBOOK ==="
                     export PATH="$HOME/python/bin:$PATH"
-                    
-                    # First, let's see what playbooks are available
-                    echo "Available playbooks:"
-                    find . -name "*.yml" -o -name "*.yaml" | grep -v ".git"
-                    
-                    # Try running a playbook based on actual structure
-                    if [ -f "ansible/playbooks/node-recovery-demo.yml" ]; then
-                        ansible-playbook -i ansible/inventory ansible/playbooks/node-recovery-demo.yml --check -v
-                    elif [ -f "playbooks/node-recovery-demo.yml" ]; then
-                        ansible-playbook -i inventory playbooks/node-recovery-demo.yml --check -v
-                    elif [ -f "node-recovery-demo.yml" ]; then
-                        ansible-playbook -i inventory node-recovery-demo.yml --check -v
+
+                    if [ -f "ansible/node_recovery.yml" ]; then
+                        echo "🚀 Running Ansible playbook: ansible/node_recovery.yml"
+                        ansible-playbook -i localhost, ansible/node_recovery.yml
                     else
-                        echo "No playbook found, creating a simple test playbook"
-                        cat > test-playbook.yml << 'EOF'
----
-- name: Test Ansible Installation
-  hosts: localhost
-  connection: local
-  tasks:
-    - name: Display success message
-      debug:
-        msg: "✅ Ansible is working correctly in Jenkins!"
-    - name: Show Python info
-      debug:
-        msg: "Python version: {{ ansible_python_version }}"
-EOF
-                        ansible-playbook -i localhost, test-playbook.yml
+                        echo "❌ node_recovery.yml not found. Please verify repository structure."
+                        exit 1
                     fi
                 '''
             }
         }
     }
-    
+
     post {
         always {
             echo "🎉 JENKINS ANSIBLE AUTOMATION COMPLETED!"
@@ -107,5 +86,10 @@ EOF
         success {
             echo "✅ SUCCESS - Pipeline executed successfully!"
         }
+        failure {
+            echo "❌ FAILURE - Pipeline encountered an error!"
+        }
     }
 }
+
+    

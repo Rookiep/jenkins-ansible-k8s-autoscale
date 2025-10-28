@@ -1,7 +1,7 @@
 ---
 - name: Kubernetes Node Auto-Recovery (Minikube or Cluster)
   hosts: localhost
-  gather_facts: yes
+  gather_facts: no
 
   vars:
     kubeconfig_path: "/home/partho/.kube/config"
@@ -24,51 +24,28 @@
     - name: Display cluster info if accessible
       debug:
         msg: "✅ Connected to Kubernetes cluster successfully."
-      when: cluster_status.rc == 0
 
-    - name: Get list of all nodes
-      shell: kubectl get nodes --no-headers -o custom-columns=NAME:.metadata.name,STATUS:.status.conditions[-1].type
-      register: node_list
-      changed_when: false
+    - name: Check node readiness
+      shell: kubectl get nodes --no-headers | awk '{print $2}'
+      register: node_status
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
 
-    - name: Display node statuses
-      debug:
-        msg: "{{ node_list.stdout_lines }}"
-
-    - name: Identify NotReady nodes
-      set_fact:
-        notready_nodes: "{{ node_list.stdout_lines | select('search', 'NotReady') | list }}"
-
-    - name: Show NotReady nodes if any
-      debug:
-        msg: "⚠️ The following nodes are NotReady: {{ notready_nodes }}"
-      when: notready_nodes | length > 0
-
-    - name: Restart kubelet service in Minikube for recovery
+    - name: Restart Minikube if node is NotReady
       shell: |
-        minikube ssh "sudo systemctl restart kubelet && sudo systemctl status kubelet --no-pager"
-      when: notready_nodes | length > 0
-      register: restart_result
-      ignore_errors: yes
-
-    - name: Display restart result
-      debug:
-        msg: "{{ restart_result.stdout }}"
-      when: restart_result is defined
-
-    - name: Verify node status post-restart
-      shell: kubectl get nodes --no-headers
-      register: verify_nodes
-      retries: 5
-      delay: 10
-      until: verify_nodes.stdout.find('NotReady') == -1
+        echo "⚠️ Node not ready, restarting Minikube..."
+        minikube stop
+        minikube start
+      when: "'NotReady' in node_status.stdout"
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
-      when: notready_nodes | length > 0
 
-    - name: Final status
-      debug:
-        msg: "✅ All nodes are now Ready."
-      when: verify_nodes is defined and verify_nodes.stdout.find('NotReady') == -1
+    - name: Confirm node recovery
+      shell: kubectl get nodes
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      register: nodes
+
+    - debug:
+        msg: "🟢 Node status after recovery:\n{{ nodes.stdout }}"
+        
