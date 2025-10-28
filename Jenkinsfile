@@ -10,8 +10,7 @@ pipeline {
 
         stage('Clone Repository') {
             steps {
-                git branch: 'main', 
-                    url: 'https://github.com/Rookiep/jenkins-ansible-k8s-autoscale.git'
+                git branch: 'main', url: 'https://github.com/Rookiep/jenkins-ansible-k8s-autoscale.git'
             }
         }
 
@@ -90,20 +89,7 @@ pipeline {
             echo "❌ FAILURE - Pipeline encountered an error!"
         }
     }
-stage('Run Node Recovery Playbook') {
-    steps {
-        sh '''
-            echo "=== RUNNING NODE RECOVERY PLAYBOOK ==="
-            export PATH="$HOME/python/bin:$PATH"
-
-            if [ -f "ansible/node_recovery.yml" ]; then
-                echo "🚀 Running Ansible playbook: ansible/node_recovery.yml"
-                ansible-playbook -i localhost, ansible/node_recovery.yml
-            else
-                echo "⚠️ Playbook not found"
-            fi
-        '''
-    }
 }
+
 
     

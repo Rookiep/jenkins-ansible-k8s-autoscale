@@ -1,7 +1,7 @@
 ---
 - name: Kubernetes Node Auto-Recovery (Minikube or Cluster)
   hosts: localhost
-  connection: local   # 👈 Prevent SSH, use local connection
+  connection: local   # Prevents SSH; uses local execution
   gather_facts: yes
 
   vars:
