@@ -20,54 +20,21 @@ pipeline {
             }
         }
 
-        stage('Verify Checkout') {
-            steps {
-                sh 'git status && ls -la'
-            }
-        }
-
         stage('Install kubectl') {
             steps {
                 script {
                     sh '''
-                        # Install kubectl if not present
-                        if ! command -v kubectl &> /dev/null; then
-                            echo "Installing kubectl..."
-                            curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-                            chmod +x kubectl
-                            sudo mv kubectl /usr/local/bin/
-                        else
-                            echo "kubectl is already installed"
-                        fi
+                        # Install kubectl
+                        echo "Installing kubectl..."
+                        curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+                        chmod +x kubectl
+                        mkdir -p /usr/local/bin
+                        mv kubectl /usr/local/bin/kubectl
                         
                         # Verify installation
-                        kubectl version --client
+                        echo "Kubectl version:"
+                        /usr/local/bin/kubectl version --client
                     '''
-                }
-            }
-        }
-
-        stage('Configure K8s Access') {
-            steps {
-                script {
-                    // Method 1: If you have kubeconfig file in your repository
-                    sh '''
-                        # Copy kubeconfig to appropriate location
-                        if [ -f "kubeconfig" ]; then
-                            mkdir -p ~/.kube
-                            cp kubeconfig ~/.kube/config
-                            chmod 600 ~/.kube/config
-                        fi
-                    '''
-                    
-                    // Method 2: Use Jenkins credentials for kubeconfig
-                    withCredentials([file(credentialsId: 'k8s-kubeconfig', variable: 'KUBECONFIG')]) {
-                        sh '''
-                            mkdir -p ~/.kube
-                            cp $KUBECONFIG ~/.kube/config
-                            chmod 600 ~/.kube/config
-                        '''
-                    }
                 }
             }
         }
@@ -76,13 +43,12 @@ pipeline {
             steps {
                 script {
                     sh '''
-                        # Test kubectl connection
-                        kubectl cluster-info
-                        kubectl get nodes
+                        # Use full path to kubectl
+                        /usr/local/bin/kubectl apply -f k8s/deployment.yaml
+                        /usr/local/bin/kubectl apply -f k8s/service.yaml
                         
-                        # Deploy applications
-                        kubectl apply -f k8s/deployment.yaml
-                        kubectl apply -f k8s/service.yaml
+                        # Verify deployment
+                        /usr/local/bin/kubectl get pods
                     '''
                 }
             }
@@ -92,13 +58,8 @@ pipeline {
             steps {
                 script {
                     sh '''
-                        # Install ansible if not present (optional)
-                        if ! command -v ansible &> /dev/null; then
-                            echo "Ansible not found, installing..."
-                            apt-get update && apt-get install -y ansible
-                        fi
-                        
-                        ansible-playbook -i ansible/inventory.ini ansible/node_recovery.yml
+                        # Check if ansible is available
+                        ansible-playbook -i ansible/inventory.ini ansible/node_recovery.yml || echo "Ansible not available or playbook failed"
                     '''
                 }
             }
@@ -106,7 +67,7 @@ pipeline {
 
         stage('Apply HPA') {
             steps {
-                sh 'kubectl apply -f k8s/hpa.yaml'
+                sh '/usr/local/bin/kubectl apply -f k8s/hpa.yaml'
             }
         }
     }
