@@ -3,7 +3,6 @@ pipeline {
 
     environment {
         KUBECONFIG = '/home/jenkins/.kube/config'
-        CACHE_DIR = '/var/jenkins_home/.cache/pip'
     }
 
     stages {
@@ -21,17 +20,31 @@ pipeline {
             }
         }
 
-        stage('Install Python & Ansible (cached)') {
-  steps {
-    echo '✅ Python & Ansible preinstalled in Jenkins image.'
-  }
-}
+        stage('Install Prerequisites') {
+            steps {
+                echo '🔧 Installing kubectl, Python & Ansible if missing...'
+                sh '''
+                    apt-get update -y
+                    apt-get install -y curl python3 python3-pip
+                    if ! command -v kubectl &> /dev/null; then
+                        echo "Installing kubectl..."
+                        curl -LO "https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl"
+                        chmod +x kubectl && mv kubectl /usr/local/bin/
+                    fi
+                    pip3 install ansible --break-system-packages || true
+                '''
+            }
+        }
 
         stage('Verify Kubernetes Connectivity') {
             steps {
                 sh '''
                     echo "=== Checking Kubernetes Context ==="
-                    kubectl config current-context || echo "⚠️ No context found"
+                    if ! kubectl config current-context; then
+                        echo "⚠️ No Kubernetes context found — please mount ~/.kube/config"
+                    else
+                        echo "✅ Kubernetes context verified"
+                    fi
                 '''
             }
         }
@@ -48,9 +61,11 @@ pipeline {
     }
 
     post {
-        always {
-            echo "✅ Pipeline completed."
-            cleanWs()
+        success {
+            echo '✅ Pipeline completed successfully!'
+        }
+        failure {
+            echo '❌ Pipeline failed — please check the logs above.'
         }
     }
 }
