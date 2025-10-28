@@ -5,7 +5,7 @@
   gather_facts: no
 
   vars:
-    kubeconfig_path: "/home/partho/.kube/config"
+    kubeconfig_path: "/home/jenkins/.kube/config"
 
   tasks:
     - name: Check Kubernetes cluster status
