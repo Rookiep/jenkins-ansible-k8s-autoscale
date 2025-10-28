@@ -1,142 +1,74 @@
 ---
-- name: "Kubernetes Node Auto-Recovery (Minikube or Cluster)"
+- name: Kubernetes Node Auto-Recovery (Minikube or Cluster)
   hosts: localhost
-  connection: local
-  gather_facts: false
+  gather_facts: yes
 
   vars:
-    auto_restart: true           # Set to false to require manual confirmation
-    restart_timeout: 300         # Time (in seconds) to wait for node recovery
-    simulate_ssh_restart: false  # Set to false for real SSH reboot in clusters
+    kubeconfig_path: "/home/partho/.kube/config"
 
   tasks:
-    - name: "Check Kubernetes cluster accessibility"
-      command: kubectl cluster-info
+    - name: Check Kubernetes cluster accessibility
+      shell: kubectl cluster-info --kubeconfig {{ kubeconfig_path }}
       register: cluster_status
       ignore_errors: yes
-      changed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
 
-    - name: "Abort if Kubernetes cluster not accessible"
-      when: cluster_status.rc != 0
+    - name: Abort if Kubernetes cluster not accessible
       fail:
         msg: |
           ❌ Kubernetes cluster is not accessible.
           💡 Run 'minikube start' or check your kubeconfig context.
+      when: cluster_status.rc != 0
 
-    - name: "Detect cluster type (Minikube or other)"
-      shell: kubectl config current-context
-      register: kube_context
+    - name: Display cluster info if accessible
+      debug:
+        msg: "✅ Connected to Kubernetes cluster successfully."
+      when: cluster_status.rc == 0
+
+    - name: Get list of all nodes
+      shell: kubectl get nodes --no-headers -o custom-columns=NAME:.metadata.name,STATUS:.status.conditions[-1].type
+      register: node_list
       changed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
 
-    - name: "Set cluster type variable"
+    - name: Display node statuses
+      debug:
+        msg: "{{ node_list.stdout_lines }}"
+
+    - name: Identify NotReady nodes
       set_fact:
-        is_minikube: "{{ 'minikube' in kube_context.stdout }}"
+        notready_nodes: "{{ node_list.stdout_lines | select('search', 'NotReady') | list }}"
 
-    - name: "Show detected cluster type"
+    - name: Show NotReady nodes if any
       debug:
-        msg: |
-          🧩 Cluster Type Detection
-          ========================
-          Context: {{ kube_context.stdout }}
-          Detected: {{ 'Minikube (Local)' if is_minikube else 'Standard Cluster (Remote)' }}
+        msg: "⚠️ The following nodes are NotReady: {{ notready_nodes }}"
+      when: notready_nodes | length > 0
 
-    - name: "Get all nodes and their status"
-      command: kubectl get nodes --no-headers
-      register: all_nodes
-      changed_when: false
-
-    - name: "Identify unhealthy nodes (NotReady)"
-      shell: kubectl get nodes --no-headers | awk '$2 != "Ready" {print $1}'
-      register: unhealthy_nodes
+    - name: Restart kubelet service in Minikube for recovery
+      shell: |
+        minikube ssh "sudo systemctl restart kubelet && sudo systemctl status kubelet --no-pager"
+      when: notready_nodes | length > 0
+      register: restart_result
       ignore_errors: yes
-      changed_when: false
 
-    - name: "Display node health summary"
+    - name: Display restart result
       debug:
-        msg: |
-          🏥 NODE HEALTH SUMMARY
-          ======================
-          Total nodes: {{ all_nodes.stdout_lines | length }}
-          Unhealthy nodes: {{ unhealthy_nodes.stdout_lines | length }}
-          {% if unhealthy_nodes.stdout_lines | length > 0 %}
-          ⚠️ Affected nodes: {{ unhealthy_nodes.stdout_lines | join(', ') }}
-          {% else %}
-          ✅ All nodes are healthy.
-          {% endif %}
+        msg: "{{ restart_result.stdout }}"
+      when: restart_result is defined
 
-    - name: "Ask for confirmation if auto_restart disabled"
-      pause:
-        prompt: |
-          ⚠️ Unhealthy nodes detected: {{ unhealthy_nodes.stdout_lines | join(', ') }}
-          Proceed with node restart? (Type 'YES' to confirm)
-        echo: yes
-      when:
-        - unhealthy_nodes.stdout_lines | length > 0
-        - not auto_restart
+    - name: Verify node status post-restart
+      shell: kubectl get nodes --no-headers
+      register: verify_nodes
+      retries: 5
+      delay: 10
+      until: verify_nodes.stdout.find('NotReady') == -1
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      when: notready_nodes | length > 0
 
-    - name: "Perform node recovery process"
-      when: unhealthy_nodes.stdout_lines | length > 0
-      block:
-
-        - name: "Step 1: Cordon unhealthy nodes"
-          command: kubectl cordon {{ item }}
-          loop: "{{ unhealthy_nodes.stdout_lines }}"
-          ignore_errors: yes
-
-        - name: "Step 2: Drain unhealthy nodes"
-          command: kubectl drain {{ item }} --ignore-daemonsets --delete-emptydir-data --force
-          loop: "{{ unhealthy_nodes.stdout_lines }}"
-          ignore_errors: yes
-
-        - name: "Step 3: Restart nodes based on environment"
-          block:
-            - name: "Restart Minikube (Local Environment)"
-              shell: |
-                echo "🔄 Restarting Minikube cluster..."
-                minikube stop && minikube start
-              when: is_minikube
-              ignore_errors: yes
-
-            - name: "Restart via SSH (Cluster Environment)"
-              shell: |
-                echo "🔄 Restarting remote node {{ item }} via SSH..."
-                {% if not simulate_ssh_restart %}
-                ssh -o StrictHostKeyChecking=no {{ item }} 'sudo reboot'
-                {% else %}
-                echo "Simulating SSH reboot for {{ item }}..."
-                sleep 5
-                {% endif %}
-              loop: "{{ unhealthy_nodes.stdout_lines }}"
-              when: not is_minikube
-              ignore_errors: yes
-
-        - name: "Step 4: Wait for nodes to recover"
-          shell: kubectl wait --for=condition=Ready node/{{ item }} --timeout={{ restart_timeout }}s
-          loop: "{{ unhealthy_nodes.stdout_lines }}"
-          ignore_errors: yes
-
-        - name: "Step 5: Uncordon recovered nodes"
-          command: kubectl uncordon {{ item }}
-          loop: "{{ unhealthy_nodes.stdout_lines }}"
-          ignore_errors: yes
-
-        - name: "Step 6: Verify node readiness"
-          command: kubectl get node {{ item }} -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
-          register: recovery_status
-          loop: "{{ unhealthy_nodes.stdout_lines }}"
-          ignore_errors: yes
-
-    - name: "Display recovery summary"
+    - name: Final status
       debug:
-        msg: |
-          ✅ NODE RECOVERY SUMMARY
-          ==========================
-          {% if unhealthy_nodes.stdout_lines | length == 0 %}
-          🌿 All nodes healthy — no restart required.
-          {% else %}
-          🩺 Nodes processed: {{ unhealthy_nodes.stdout_lines | join(', ') }}
-          {% for node in recovery_status.results %}
-          🔹 {{ node.item }} → {{ node.stdout | default('UNKNOWN') }}
-          {% endfor %}
-          ✅ Recovery completed successfully.
-          {% endif %}
+        msg: "✅ All nodes are now Ready."
+      when: verify_nodes is defined and verify_nodes.stdout.find('NotReady') == -1
