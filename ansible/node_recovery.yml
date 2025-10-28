@@ -1,47 +1,104 @@
-- name: "Kubernetes Node Recovery"
+---
+- name: Restart and Recover Minikube Node
   hosts: localhost
-  gather_facts: false
+  connection: local
+  gather_facts: yes
   
+  vars:
+    minikube_profile: "minikube"
+    wait_timeout: 300
+    
   tasks:
-    - name: "Check Kubernetes accessibility"
-      command: kubectl cluster-info
-      register: cluster_check
-      ignore_errors: yes
+    - name: Check current Minikube status
+      command: minikube status --profile {{ minikube_profile }}
+      register: minikube_status
       changed_when: false
       
-    - name: "Real recovery when cluster accessible"
-      block:
-        - name: "Get node status"
-          command: kubectl get nodes
-          
-        - name: "Check for NotReady nodes"
-          shell: kubectl get nodes --no-headers | grep -v Ready | awk '{print $1}'
-          register: notready_nodes
-          ignore_errors: yes
-          
-        - name: "Execute recovery"
-          block:
-            - name: "Restart minikube"
-              command: minikube stop && minikube start
-              
-          when: notready_nodes.stdout_lines | length > 0
-          
-      when: cluster_check.rc == 0
+    - name: Display current Minikube status
+      debug:
+        var: minikube_status.stdout
 
-    - name: "Simulation mode"
-      block:
-        - name: "Show simulation message"
-          debug:
-            msg: |
-              🔄 AUTOMATION WORKFLOW DEMONSTRATION
-              ===================================
-              
-              In production with Kubernetes access, this would:
-              - Monitor node health
-              - Detect NotReady nodes automatically
-              - Execute recovery procedures
-              - Verify node restoration
-              
-              ✅ Automation code verified and ready for production!
-              
-      when: cluster_check.rc != 0
+    - name: Check Kubernetes node status
+      command: kubectl get nodes
+      register: k8s_nodes
+      changed_when: false
+      ignore_errors: yes
+      
+    - name: Display Kubernetes node status
+      debug:
+        var: k8s_nodes.stdout
+
+    - name: Stop Minikube cluster
+      command: minikube stop --profile {{ minikube_profile }}
+      register: stop_result
+      when: "'Stopped' not in minikube_status.stdout"
+      
+    - name: Display stop result
+      debug:
+        var: stop_result.stdout
+      when: stop_result is defined
+
+    - name: Wait for cluster to stop
+      pause:
+        seconds: 10
+      when: stop_result is defined
+
+    - name: Start Minikube cluster
+      command: minikube start --profile {{ minikube_profile }}
+      register: start_result
+      
+    - name: Display start result
+      debug:
+        var: start_result.stdout
+
+    - name: Wait for Kubernetes API to be ready
+      wait_for:
+        host: "{{ minikube_ip | default('127.0.0.1') }}"
+        port: 8443
+        timeout: "{{ wait_timeout }}"
+      ignore_errors: yes
+
+    - name: Check Minikube status after restart
+      command: minikube status --profile {{ minikube_profile }}
+      register: final_minikube_status
+      changed_when: false
+      
+    - name: Display final Minikube status
+      debug:
+        var: final_minikube_status.stdout
+
+    - name: Check Kubernetes nodes after restart
+      command: kubectl get nodes
+      register: final_k8s_nodes
+      changed_when: false
+      
+    - name: Display final Kubernetes node status
+      debug:
+        var: final_k8s_nodes.stdout
+
+    - name: Verify node readiness
+      command: kubectl get nodes -o jsonpath='{.items[*].status.conditions[?(@.type=="Ready")].status}'
+      register: node_readiness
+      changed_when: false
+      
+    - name: Display node readiness status
+      debug:
+        var: node_readiness.stdout
+
+    - name: Check system pods status
+      command: kubectl get pods -n kube-system
+      register: system_pods
+      changed_when: false
+      
+    - name: Display system pods status
+      debug:
+        var: system_pods.stdout
+
+    - name: Final recovery status
+      debug:
+        msg: |
+          🎉 Minikube node recovery completed!
+          📊 Initial status: {{ minikube_status.stdout }}
+          📊 Final status: {{ final_minikube_status.stdout }}
+          🌟 Node readiness: {{ node_readiness.stdout }}
+      when: final_minikube_status is defined
