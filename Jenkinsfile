@@ -20,18 +20,14 @@ pipeline {
     }
 }
 
-  stage('Install Prerequisites') {
+ stage('Install Prerequisites') {
     steps {
-        echo '🔧 Installing kubectl, Python & Ansible if missing...'
+        echo "🔧 Installing kubectl, Python & Ansible if missing..."
         sh '''
-            sudo apt-get update -y
-            sudo apt-get install -y curl python3 python3-pip
-            if ! command -v kubectl &> /dev/null; then
-                echo "Installing kubectl..."
-                curl -LO "https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl"
-                chmod +x kubectl && sudo mv kubectl /usr/local/bin/
-            fi
-            pip3 install ansible --break-system-packages || true
+            apt-get update -y
+            apt-get install -y python3 python3-pip ansible curl
+            curl -LO "https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl"
+            chmod +x kubectl && mv kubectl /usr/local/bin/
         '''
     }
 }
