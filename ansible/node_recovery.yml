@@ -1,124 +1,51 @@
-- name: "EMERGENCY Node Recovery - Force Ready State"
+- name: "Real Kubernetes Node Recovery"
   hosts: localhost
   gather_facts: false
   
   tasks:
-    - name: "Display current NOTREADY state"
-      shell: kubectl get nodes
-      register: current_status
+    - name: "Get current node status"
+      command: kubectl get nodes
+      register: node_status
       
-    - name: "Show problem state"
+    - name: "Display current status"
       debug:
         msg: |
-          🔴 CURRENT STATE - NODE NOTREADY
-          ===============================
-          {{ current_status.stdout }}
+          📊 CURRENT NODE STATUS
+          =====================
+          {{ node_status.stdout }}
 
-    - name: "Step 1: Check what's actually running in minikube"
+    - name: "Check for NotReady nodes"
       shell: |
-        echo "=== Minikube Status ==="
-        minikube status
-        echo ""
-        echo "=== Kubelet Status ==="
-        minikube ssh "sudo systemctl status kubelet --no-pager" || echo "Kubelet not running"
-        echo ""
-        echo "=== Containerd Status ==="
-        minikube ssh "sudo systemctl status containerd --no-pager" || echo "Containerd not running"
-      register: service_status
+        kubectl get nodes --no-headers | grep -v Ready | awk '{print $1}'
+      register: notready_nodes
       ignore_errors: yes
-
-    - name: "Display service status"
-      debug:
-        msg: |
-          🔧 SERVICE STATUS ANALYSIS
-          =========================
-          {{ service_status.stdout }}
-
-    - name: "Step 2: FORCE RESTART - Stop everything"
+      
+    - name: "Execute node recovery"
       block:
-        - name: "Stop minikube completely"
-          command: minikube stop
+        - name: "Cordon unhealthy nodes"
+          command: "kubectl cordon {{ item }}"
+          loop: "{{ notready_nodes.stdout_lines }}"
+          
+        - name: "Drain nodes"
+          command: "kubectl drain {{ item }} --ignore-daemonsets --delete-emptydir-data --force"
+          loop: "{{ notready_nodes.stdout_lines }}"
           ignore_errors: yes
           
-        - name: "Wait for complete stop"
-          pause:
-            seconds: 10
-            
-        - name: "Kill any remaining processes"
+        - name: "Delete and recreate node"
+          command: "kubectl delete node {{ item }}"
+          loop: "{{ notready_nodes.stdout_lines }}"
+          ignore_errors: yes
+          
+        - name: "Wait for node to rejoin"
           shell: |
-            minikube ssh "sudo pkill -f kubelet || true"
-            minikube ssh "sudo pkill -f containerd || true"
+            for i in {1..30}; do
+              if kubectl get node {{ item }} &>/dev/null; then
+                exit 0
+              fi
+              sleep 5
+            done
+            exit 1
+          loop: "{{ notready_nodes.stdout_lines }}"
           ignore_errors: yes
-
-    - name: "Step 3: FORCE RESTART - Start everything fresh"
-      block:
-        - name: "Start minikube"
-          command: minikube start
-          ignore_errors: yes
-          register: start_result
           
-        - name: "Wait for initialization"
-          pause:
-            seconds: 30
-            
-        - name: "Force start kubelet if needed"
-          shell: |
-            minikube ssh "sudo systemctl daemon-reload"
-            minikube ssh "sudo systemctl start containerd"
-            minikube ssh "sudo systemctl start kubelet"
-          ignore_errors: yes
-          when: start_result.rc != 0
-
-    - name: "Step 4: Wait for node to become Ready"
-      shell: |
-        echo "⏳ Waiting for node recovery..."
-        for i in {1..40}; do
-          if kubectl get nodes minikube -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null | grep -q "True"; then
-            echo "✅ SUCCESS: Node is now Ready!"
-            kubectl get nodes -o wide
-            exit 0
-          fi
-          echo "Still waiting... ($i/40)"
-          sleep 3
-        done
-        echo "❌ FAILED: Node still not ready after timeout"
-        kubectl get nodes
-        exit 1
-      register: recovery_wait
-      ignore_errors: yes
-
-    - name: "Step 5: Nuclear option if still not working"
-      block:
-        - name: "Complete cluster reset"
-          shell: |
-            minikube delete
-            minikube start
-          ignore_errors: yes
-          when: recovery_wait.rc != 0
-          
-        - name: "Wait after nuclear reset"
-          pause:
-            seconds: 30
-
-    - name: "Step 6: Final verification"
-      shell: |
-        echo "=== FINAL STATUS ==="
-        kubectl get nodes -o wide
-        echo ""
-        echo "=== NODE DETAILS ==="
-        kubectl describe node minikube | grep -A 10 Conditions
-      register: final_status
-      ignore_errors: yes
-
-    - name: "Display final results"
-      debug:
-        msg: |
-          🎯 RECOVERY RESULTS
-          ==================
-          {{ final_status.stdout }}
-          
-          {% if recovery_wait.rc == 0 %}
-          ✅ SUCCESS: Node recovery completed!
-          {% else %}
-          ❌ FAILED: Node still not ready - manual intervention required
-          {% endif %}
+      when: notready_nodes.stdout_lines | length > 0
