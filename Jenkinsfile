@@ -22,25 +22,10 @@ pipeline {
         }
 
         stage('Install Python & Ansible (cached)') {
-            steps {
-                sh '''
-                    echo "=== Installing Standalone Python if missing ==="
-                    if [ ! -d "/var/jenkins_home/python" ]; then
-                        curl -L -o python.tar.gz https://github.com/indygreg/python-build-standalone/releases/download/20230826/cpython-3.9.18+20230826-x86_64-unknown-linux-gnu-install_only.tar.gz
-                        mkdir -p /var/jenkins_home/python
-                        tar -xzf python.tar.gz -C /var/jenkins_home/python --strip-components=1
-                    fi
-                    export PATH=/var/jenkins_home/python/bin:$PATH
-                    echo "Python version:" && python3 --version
-
-                    echo "=== Installing Ansible with caching ==="
-                    mkdir -p $CACHE_DIR
-                    python3 -m pip install --upgrade pip wheel
-                    pip3 install --cache-dir=$CACHE_DIR --prefer-binary ansible==8.7.0
-                    ansible --version
-                '''
-            }
-        }
+  steps {
+    echo '✅ Python & Ansible preinstalled in Jenkins image.'
+  }
+}
 
         stage('Verify Kubernetes Connectivity') {
             steps {
