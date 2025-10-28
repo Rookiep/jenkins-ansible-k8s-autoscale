@@ -1,12 +1,11 @@
 pipeline {
   agent any
 
-  stages {
-    stage('Checkout') {
-      steps {
-        git 'https://github.com/Rookiep/jenkins-ansible-k8s-autoscale.git'
-      }
+stage('Checkout') {
+    steps {
+        git branch: 'main', url: 'https://github.com/Rookiep/jenkins-ansible-k8s-autoscale.git'
     }
+}
 
     stage('Deploy to K8s') {
       steps {
