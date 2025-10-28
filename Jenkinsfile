@@ -7,10 +7,10 @@ pipeline {
 
     stages {
 
-        stage('Checkout') {
+        stage('Initialize') {
             steps {
-                echo '📥 Checking out source code from main branch...'
-                git branch: 'main', url: 'https://github.com/Rookiep/jenkins-ansible-k8s-autoscale.git'
+                echo '🚀 Starting Jenkins CI/CD pipeline for Ansible + K8s...'
+                sh 'pwd && ls -la'
             }
         }
 
@@ -18,6 +18,10 @@ pipeline {
             steps {
                 echo '🐳 Building Docker image...'
                 sh '''
+                    echo "Checking Docker daemon status..."
+                    docker info > /dev/null 2>&1 || (echo "❌ Docker daemon not running!" && exit 1)
+
+                    echo "Building image..."
                     docker build -t jenkins-ansible-k8s-autoscale:latest .
                 '''
             }
@@ -25,7 +29,7 @@ pipeline {
 
         stage('Push Docker Image (Optional)') {
             when {
-                expression { return false } // disable if no Docker registry
+                expression { return false } // Enable if pushing to DockerHub or ECR
             }
             steps {
                 echo '📦 Pushing Docker image to registry...'
@@ -36,10 +40,11 @@ pipeline {
             }
         }
 
-        stage('Deploy to K8s') {
+        stage('Deploy to Kubernetes') {
             steps {
-                echo '🚀 Deploying application to Kubernetes...'
+                echo '🚀 Deploying application to Kubernetes cluster...'
                 sh '''
+                    kubectl get nodes
                     kubectl apply -f k8s/deployment.yaml
                     kubectl apply -f k8s/service.yaml
                 '''
@@ -48,22 +53,23 @@ pipeline {
 
         stage('Run Ansible Node Health Check') {
             steps {
-                echo '🧩 Running Ansible health check on Kubernetes nodes...'
+                echo '🧩 Running Ansible node health check...'
                 sh '''
+                    ansible --version
                     ansible-playbook ansible/node_health_check.yml
                 '''
             }
         }
 
-        stage('Apply HPA (Horizontal Pod Autoscaler)') {
+        stage('Apply Horizontal Pod Autoscaler (HPA)') {
             steps {
                 echo '⚙️ Applying Horizontal Pod Autoscaler...'
                 sh '''
                     kubectl apply -f k8s/hpa.yaml
+                    kubectl get hpa
                 '''
             }
         }
-
     }
 
     post {
@@ -71,8 +77,7 @@ pipeline {
             echo '✅ Deployment and health check completed successfully.'
         }
         failure {
-            echo '❌ Build failed — please check logs for details.'
+            echo '❌ Build failed — check logs for details.'
         }
     }
 }
-
