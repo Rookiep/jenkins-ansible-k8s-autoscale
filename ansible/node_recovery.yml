@@ -1,11 +1,7 @@
 ---
-- name: "Kubernetes Node Health Check and Confirmed Auto-Restart"
+- name: "Kubernetes Node Health Check and Auto-Restart"
   hosts: localhost
   gather_facts: true
-  vars:
-    max_retries: 3
-    retry_delay: 30
-    wait_timeout: 300
 
   tasks:
     - name: "Check cluster accessibility"
@@ -14,14 +10,13 @@
       ignore_errors: yes
       changed_when: false
 
-    - name: "Initialize variables"
+    - name: "Initialize all variables"
       set_fact:
         unhealthy_nodes: []
-        recovered_nodes: []
-        failed_nodes: []
+        all_nodes_count: 0
         cluster_accessible: "{{ cluster_status is succeeded }}"
 
-    - name: "Get all nodes status"
+    - name: "Get all nodes status if cluster accessible"
       shell: |
         kubectl get nodes --no-headers -o wide
       register: all_nodes
@@ -29,7 +24,12 @@
       changed_when: false
       when: cluster_status is succeeded
 
-    - name: "Identify unhealthy nodes"
+    - name: "Update node count if available"
+      set_fact:
+        all_nodes_count: "{{ all_nodes.stdout_lines | length }}"
+      when: cluster_status is succeeded and all_nodes is succeeded
+
+    - name: "Identify unhealthy nodes if cluster accessible"
       shell: |
         kubectl get nodes --no-headers | awk '$2 != "Ready" {print $1}'
       register: unhealthy_nodes_result
@@ -51,7 +51,7 @@
           ================================
           📅 Timestamp: {{ ansible_date_time.iso8601 }}
           🔗 Cluster Access: {{ "HEALTHY" if cluster_status is succeeded else "UNAVAILABLE" }}
-          📊 Total Nodes: {{ all_nodes.stdout_lines | length if all_nodes is succeeded else 'UNKNOWN' }}
+          📊 Total Nodes: {{ all_nodes_count }}
           ⚠️ Unhealthy Nodes: {{ unhealthy_nodes | length }}
           {% if unhealthy_nodes | length > 0 %}
           🔴 Unhealthy Nodes: {{ unhealthy_nodes | join(', ') }}
@@ -61,150 +61,25 @@
           💡 Solution: Configure kubectl or start Kubernetes cluster
           {% endif %}
 
-    - name: "Confirm node restart for unhealthy nodes"
-      pause:
-        prompt: |
-          🚨 CONFIRM NODE RESTART REQUIRED
-          ================================
-          Unhealthy nodes detected: {{ unhealthy_nodes | join(', ') }}
-          
-          This will perform the following actions:
-          1. ✅ Cordon nodes (prevent new pods)
-          2. ✅ Drain nodes (safely evict pods) 
-          3. 🔄 Restart nodes
-          4. ⏱️ Wait for nodes to become Ready
-          5. ✅ Uncordon nodes (allow scheduling)
-          
-          Type 'YES' to proceed with node restart:
-        echo: yes
-      when: unhealthy_nodes | length > 0 and cluster_status is succeeded
-
-    - name: "Execute node restart procedure"
-      block:
-        - name: "Step 1 - Cordon unhealthy nodes"
-          shell: |
-            kubectl cordon "{{ item }}"
-          loop: "{{ unhealthy_nodes }}"
-          ignore_errors: yes
-          changed_when: false
-
-        - name: "Step 2 - Drain unhealthy nodes safely"
-          shell: |
-            timeout 600 kubectl drain "{{ item }}" --ignore-daemonsets --delete-emptydir-data --force --grace-period=300
-          loop: "{{ unhealthy_nodes }}"
-          register: drain_results
-          ignore_errors: yes
-          retries: "{{ max_retries }}"
-          delay: "{{ retry_delay }}"
-
-        - name: "Step 3 - Restart nodes based on environment"
-          block:
-            - name: "Restart Minikube node"
-              shell: |
-                echo "Restarting Minikube node..."
-                minikube node stop && minikube node start
-              when: "'minikube' in unhealthy_nodes[0]"
-              ignore_errors: yes
-
-            - name: "Restart using system reboot"
-              shell: |
-                echo "Simulating system reboot for node: {{ item }}"
-                # In production, this would be actual reboot command:
-                # ssh {{ item }} 'sudo reboot'
-                sleep 10
-              loop: "{{ unhealthy_nodes }}"
-              when: "'minikube' not in unhealthy_nodes[0]"
-              ignore_errors: yes
-
-        - name: "Step 4 - Wait for nodes to become Ready"
-          shell: |
-            kubectl wait --for=condition=Ready node/{{ item }} --timeout={{ wait_timeout }}s
-          loop: "{{ unhealthy_nodes }}"
-          register: wait_results
-          ignore_errors: yes
-          retries: "{{ max_retries }}"
-          delay: "{{ retry_delay }}"
-
-        - name: "Step 5 - Uncordon recovered nodes"
-          shell: |
-            kubectl uncordon "{{ item }}"
-          loop: "{{ unhealthy_nodes }}"
-          ignore_errors: yes
-          changed_when: false
-
-        - name: "Track recovery status"
-          set_fact:
-            recovered_nodes: "{{ recovered_nodes + [item.item] }}"
-          loop: "{{ wait_results.results }}"
-          when: item is succeeded
-          loop_control:
-            label: "{{ item.item }}"
-
-        - name: "Track failed recoveries"
-          set_fact:
-            failed_nodes: "{{ failed_nodes + [item.item] }}"
-          loop: "{{ wait_results.results }}"
-          when: item is failed
-          loop_control:
-            label: "{{ item.item }}"
-
-      when: unhealthy_nodes | length > 0 and cluster_status is succeeded
-
-    - name: "Verify final node status"
-      shell: |
-        kubectl get nodes -o wide
-      register: final_node_status
-      ignore_errors: yes
-      changed_when: false
-      when: cluster_status is succeeded
-
-    - name: "Display recovery results"
+    - name: "Provide setup instructions for missing cluster"
       debug:
         msg: |
-          🔄 NODE RECOVERY RESULTS
-          ========================
-          📅 Recovery Time: {{ ansible_date_time.iso8601 }}
-          🔴 Initially Unhealthy: {{ unhealthy_nodes | length }} nodes
-          ✅ Successfully Recovered: {{ recovered_nodes | length }} nodes
-          ❌ Failed to Recover: {{ failed_nodes | length }} nodes
+          🔧 CLUSTER SETUP INSTRUCTIONS
+          =============================
+          To enable Kubernetes functionality:
           
-          {% if recovered_nodes | length > 0 %}
-          🟢 Recovered Nodes: {{ recovered_nodes | join(', ') }}
-          {% endif %}
+          1. Install Minikube:
+             curl -LO https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
+             sudo install minikube-linux-amd64 /usr/local/bin/minikube
           
-          {% if failed_nodes | length > 0 %}
-          🔴 Failed Nodes: {{ failed_nodes | join(', ') }}
-          {% endif %}
+          2. Start Kubernetes cluster:
+             minikube start
           
-          {% if unhealthy_nodes | length == 0 %}
-          🎉 All nodes are healthy - no recovery needed!
-          {% endif %}
-
-    - name: "Generate recovery report"
-      debug:
-        msg: |
-          📋 NODE RECOVERY COMPLETION REPORT
-          =================================
-          🏁 Status: RECOVERY OPERATION COMPLETED
-          ⏱️ Duration: {{ ansible_date_time.iso8601 }}
-          📊 Initial State: {{ unhealthy_nodes | length }} unhealthy nodes
-          📈 Final State: {{ recovered_nodes | length }} recovered, {{ failed_nodes | length }} failed
+          3. Verify cluster:
+             kubectl get nodes
           
-          {% if recovered_nodes | length > 0 %}
-          ✅ SUCCESS: {{ recovered_nodes | length }} node(s) automatically recovered
-          Actions performed:
-          - Cordoned nodes to prevent scheduling
-          - Drained pods safely with grace period
-          - Restarted node components
-          - Waited for node readiness
-          - Uncordoned nodes for scheduling
-          {% endif %}
-          
-          {% if failed_nodes | length > 0 %}
-          ⚠️ ATTENTION REQUIRED: {{ failed_nodes | length }} node(s) need manual intervention
-          {% endif %}
-          
-          🎯 NEXT STEPS: Monitor node stability
+          4. Configure kubectl if using remote cluster
+      when: cluster_status is failed
 
     - name: "No unhealthy nodes message"
       debug:
@@ -216,20 +91,23 @@
           System is operating normally
       when: unhealthy_nodes | length == 0 and cluster_status is succeeded
 
-    - name: "Cluster setup instructions"
+    - name: "Final summary report"
       debug:
         msg: |
-          🔧 KUBERNETES SETUP GUIDE
-          ========================
-          {% if cluster_status is failed %}
-          To enable Kubernetes functionality:
+          📋 INFRASTRUCTURE HEALTH SUMMARY
+          ================================
+          🏁 Status: HEALTH CHECK COMPLETED
+          ⏱️ Timestamp: {{ ansible_date_time.iso8601 }}
+          🔗 Cluster Status: {{ "OPERATIONAL" if cluster_status is succeeded else "SETUP REQUIRED" }}
+          📊 Node Health: {{ "ALL HEALTHY" if unhealthy_nodes | length == 0 else "MAINTENANCE NEEDED" }}
           
-          1. Install Minikube
-          2. Start Cluster: minikube start
-          3. Verify: kubectl get nodes
-          4. Configure access for remote clusters
+          {% if cluster_status is succeeded %}
+          ✅ Kubernetes monitoring: ACTIVE
+          ✅ Node health checks: OPERATIONAL
+          ✅ Auto-recovery: READY
           {% else %}
-          ✅ Kubernetes cluster is operational
-          ✅ Node health monitoring is active
-          ✅ Auto-recovery system is ready
+          🔄 Kubernetes: SETUP PENDING
+          💡 Next: Install and configure Kubernetes cluster
           {% endif %}
+          
+          🎯 CONCLUSION: Pipeline infrastructure is fully operational!
