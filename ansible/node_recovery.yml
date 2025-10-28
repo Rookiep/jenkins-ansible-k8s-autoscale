@@ -1,0 +1,31 @@
+- name: Restart unhealthy Kubernetes nodes (Minikube-focused)
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Get Kubernetes nodes
+      command: kubectl get nodes --no-headers
+      register: nodes_out
+
+    - name: Find nodes not ready
+      set_fact:
+        bad_nodes: "{{ nodes_out.stdout_lines
+                       | select('search','NotReady')
+                       | map('split')
+                       | map('first')
+                       | list }}"
+
+    - name: Print bad nodes
+      debug:
+        msg: "Unhealthy nodes: {{ bad_nodes }}"
+      when: bad_nodes | length > 0
+
+    - name: Restart unhealthy minikube nodes
+      when: bad_nodes | length > 0
+      loop: "{{ bad_nodes }}"
+      vars:
+        node_name: "{{ item }}"
+      block:
+        - name: Stop minikube node
+          command: minikube node stop {{ item }}
+        - name: Start minikube node
+          command: minikube node start {{ item }}
