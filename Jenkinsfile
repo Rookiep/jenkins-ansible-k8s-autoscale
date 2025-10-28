@@ -49,7 +49,7 @@ pipeline {
             steps {
                 sh '''
                     echo "=== Running Ansible Playbook ==="
-                    ansible-playbook -i inventory.ini playbook.yml
+                    ansible-playbook -i ansible/inventory.ini ansible/node_recovery.yml
                 '''
             }
         }
