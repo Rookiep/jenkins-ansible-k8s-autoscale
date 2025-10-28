@@ -1,7 +1,8 @@
 ---
 - name: Kubernetes Node Auto-Recovery (Minikube or Cluster)
   hosts: localhost
-  gather_facts: no
+  connection: local   # 👈 Prevent SSH, use local connection
+  gather_facts: yes
 
   vars:
     kubeconfig_path: "/home/partho/.kube/config"
@@ -25,27 +26,9 @@
       debug:
         msg: "✅ Connected to Kubernetes cluster successfully."
 
-    - name: Check node readiness
-      shell: kubectl get nodes --no-headers | awk '{print $2}'
-      register: node_status
-      environment:
-        KUBECONFIG: "{{ kubeconfig_path }}"
-
-    - name: Restart Minikube if node is NotReady
+    - name: Restart Kubernetes node (Minikube)
       shell: |
-        echo "⚠️ Node not ready, restarting Minikube..."
+        echo "🔄 Restarting Minikube node..."
         minikube stop
         minikube start
-      when: "'NotReady' in node_status.stdout"
-      environment:
-        KUBECONFIG: "{{ kubeconfig_path }}"
-
-    - name: Confirm node recovery
-      shell: kubectl get nodes
-      environment:
-        KUBECONFIG: "{{ kubeconfig_path }}"
-      register: nodes
-
-    - debug:
-        msg: "🟢 Node status after recovery:\n{{ nodes.stdout }}"
-        
+      when: cluster_status.rc == 0
