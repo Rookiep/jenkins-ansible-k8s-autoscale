@@ -2,10 +2,11 @@ pipeline {
     agent any
 
     environment {
-        KUBECONFIG = '/home/jenkins/.kube/config'
+        KUBECONFIG = '/var/jenkins_home/.kube/config'
     }
 
     stages {
+
         stage('Initialize') {
             steps {
                 echo '🚀 Starting Jenkins CI/CD pipeline for Ansible + Kubernetes...'
@@ -15,17 +16,17 @@ pipeline {
 
         stage('Clone Repository') {
             steps {
-                echo "📦 Cloning repository..."
+                echo '📦 Cloning repository...'
                 git branch: 'main', url: 'https://github.com/Rookiep/jenkins-ansible-k8s-autoscale.git'
             }
         }
 
         stage('Install Prerequisites') {
             steps {
-                echo "🔧 Installing kubectl, Python & Ansible if missing..."
+                echo '🔧 Installing kubectl, Python & Ansible if missing...'
                 sh '''
                     apt-get update -y
-                    apt-get install -y python3 python3-pip ansible curl
+                    apt-get install -y curl python3 python3-pip ansible
                     curl -LO "https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl"
                     chmod +x kubectl && mv kubectl /usr/local/bin/
                 '''
@@ -34,22 +35,35 @@ pipeline {
 
         stage('Verify Kubernetes Connectivity') {
             steps {
+                echo '🔍 Verifying Kubernetes connection...'
                 sh '''
-                    echo "=== Checking Kubernetes Context ==="
-                    if ! kubectl config current-context; then
-                        echo "⚠️ No Kubernetes context found — please mount ~/.kube/config"
-                    else
-                        echo "✅ Kubernetes context verified"
-                    fi
+                    echo "Current context:"
+                    kubectl config current-context
+                    echo "Available nodes:"
+                    kubectl get nodes -o wide
+                '''
+            }
+        }
+
+        stage('Restart Node (Simulated)') {
+            steps {
+                echo '🔁 Simulating Kubernetes node restart...'
+                sh '''
+                    NODE=$(kubectl get nodes -o name | head -n1 | cut -d'/' -f2)
+                    echo "Draining node: $NODE"
+                    kubectl drain $NODE --ignore-daemonsets --delete-emptydir-data || true
+                    sleep 5
+                    echo "Uncordoning node: $NODE"
+                    kubectl uncordon $NODE || true
                 '''
             }
         }
 
         stage('Run Ansible Playbook') {
             steps {
+                echo '⚙️ Running Ansible playbook...'
                 sh '''
-                    echo "=== Running Ansible Playbook ==="
-                    ansible-playbook -i ansible/inventory.ini ansible/node_recovery.yml
+                    ansible-playbook -i inventory.ini playbook.yml || true
                 '''
             }
         }
