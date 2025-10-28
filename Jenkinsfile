@@ -2,10 +2,23 @@ pipeline {
     agent any
 
     stages {
-        stage('Checkout') {
+        stage('Clean Workspace') {
             steps {
-                // This will use the SCM configuration from your Jenkins job
-                checkout scm
+                cleanWs()
+            }
+        }
+        
+        stage('Git Checkout') {
+            steps {
+                script {
+                    // Force clean checkout
+                    checkout scm: [
+                        $class: 'GitSCM',
+                        branches: [[name: '*/main']],
+                        extensions: [[$class: 'CleanBeforeCheckout']],
+                        userRemoteConfigs: [[url: 'https://github.com/Rookiep/jenkins-ansible-k8s-autoscale.git']]
+                    ]
+                }
             }
         }
 
@@ -16,7 +29,7 @@ pipeline {
             }
         }
 
-        stage('Run Ansible Node Health Check') {
+        stage('Run Ansible') {
             steps {
                 sh 'ansible-playbook -i ansible/inventory.ini ansible/node_recovery.yml'
             }
