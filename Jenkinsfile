@@ -18,9 +18,9 @@ pipeline {
                         echo "=== KUBERNETES MANIFESTS ==="
                         ls -la k8s/
                         echo "Deployment YAML:"
-                        cat k8s/deployment.yaml 2>/dev/null || echo "No deployment.yaml"
+                        cat k8s/deployment.yaml
                         echo "Service YAML:"
-                        cat k8s/service.yaml 2>/dev/null || echo "No service.yaml"
+                        cat k8s/service.yaml
                         
                         # Show Ansible playbooks
                         echo "=== ANSIBLE PLAYBOOKS ==="
@@ -37,16 +37,61 @@ pipeline {
             }
         }
 
-        stage('Optional: Run Ansible') {
+        stage('Install and Run Ansible') {
             steps {
-                sh '''
-                    if command -v ansible-playbook &> /dev/null && [ -f "ansible/node_recovery.yml" ]; then
-                        echo "Running Ansible playbook..."
-                        ansible-playbook -i ansible/inventory.ini ansible/node_recovery.yml
-                    else
-                        echo "Skipping Ansible (not available or no playbook)"
-                    fi
-                '''
+                script {
+                    sh '''
+                        echo "=== SETTING UP ANSIBLE ==="
+                        
+                        # Install Ansible if not available
+                        if ! command -v ansible-playbook &> /dev/null; then
+                            echo "Installing Ansible..."
+                            apt-get update > /dev/null 2>&1 || true
+                            apt-get install -y software-properties-common > /dev/null 2>&1 || true
+                            apt-add-repository --yes --update ppa:ansible/ansible > /dev/null 2>&1 || true
+                            apt-get install -y ansible > /dev/null 2>&1 || echo "Could not install Ansible via apt"
+                            
+                            # Alternative installation method
+                            if ! command -v ansible-playbook &> /dev/null; then
+                                echo "Trying pip installation..."
+                                apt-get install -y python3-pip > /dev/null 2>&1 || true
+                                pip3 install ansible > /dev/null 2>&1 || echo "Could not install Ansible via pip"
+                            fi
+                        fi
+                        
+                        # Check if Ansible is now available
+                        if command -v ansible-playbook &> /dev/null; then
+                            echo "✅ Ansible installed successfully"
+                            ansible-playbook --version
+                        else
+                            echo "⚠️ Ansible could not be installed"
+                            echo "Showing playbook content instead:"
+                            cat ansible/node_recovery.yml
+                        fi
+                    '''
+                }
+            }
+        }
+
+        stage('Run Ansible Playbook') {
+            steps {
+                script {
+                    sh '''
+                        echo "=== RUNNING ANSIBLE PLAYBOOK ==="
+                        
+                        if command -v ansible-playbook &> /dev/null && [ -f "ansible/node_recovery.yml" ]; then
+                            echo "Executing Ansible playbook..."
+                            ansible-playbook -i ansible/inventory.ini ansible/node_recovery.yml
+                            echo "✅ Ansible playbook completed successfully"
+                        else
+                            echo "⚠️ Skipping Ansible execution"
+                            echo "Playbook content:"
+                            cat ansible/node_recovery.yml 2>/dev/null || echo "No playbook found"
+                            echo "Inventory content:"
+                            cat ansible/inventory.ini 2>/dev/null || echo "No inventory found"
+                        fi
+                    '''
+                }
             }
         }
     }
@@ -55,6 +100,7 @@ pipeline {
         always {
             echo '🚀 Pipeline completed successfully!'
             echo '📚 Your application is ready for deployment once Kubernetes is configured.'
+            echo '🔧 Ansible setup attempted - check logs for details.'
         }
     }
 }
