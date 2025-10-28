@@ -1,65 +1,80 @@
 ---
-- name: "Kubernetes Node Health Check and Auto-Recovery"
+- name: "Kubernetes Node Auto-Recovery (Minikube or Cluster)"
   hosts: localhost
   connection: local
   gather_facts: false
 
   vars:
-    auto_restart: true           # If false → manual confirmation required
-    restart_timeout: 300         # Wait up to 5 minutes for node recovery
-    simulate_restart: false      # Set to false for real SSH reboot commands
+    auto_restart: true           # Set to false to require manual confirmation
+    restart_timeout: 300         # Time (in seconds) to wait for node recovery
+    simulate_ssh_restart: false  # Set to false for real SSH reboot in clusters
 
   tasks:
-
-    - name: "Check cluster accessibility"
+    - name: "Check Kubernetes cluster accessibility"
       command: kubectl cluster-info
       register: cluster_status
       ignore_errors: yes
       changed_when: false
 
-    - name: "Fail early if cluster not accessible"
+    - name: "Abort if Kubernetes cluster not accessible"
       when: cluster_status.rc != 0
       fail:
         msg: |
-          ❌ Kubernetes cluster is not accessible!
-          💡 Run `minikube start` or verify your kubeconfig context.
+          ❌ Kubernetes cluster is not accessible.
+          💡 Run 'minikube start' or check your kubeconfig context.
 
-    - name: "Get all node statuses"
-      command: kubectl get nodes --no-headers
-      register: nodes_output
+    - name: "Detect cluster type (Minikube or other)"
+      shell: kubectl config current-context
+      register: kube_context
       changed_when: false
 
-    - name: "Identify unhealthy (NotReady) nodes"
-      shell: kubectl get nodes --no-headers | awk '$2 != "Ready" {print $1}'
-      register: unhealthy_nodes
-      changed_when: false
-      ignore_errors: yes
+    - name: "Set cluster type variable"
+      set_fact:
+        is_minikube: "{{ 'minikube' in kube_context.stdout }}"
 
-    - name: "Show node health summary"
+    - name: "Show detected cluster type"
       debug:
         msg: |
-          🏥 NODE HEALTH STATUS
+          🧩 Cluster Type Detection
+          ========================
+          Context: {{ kube_context.stdout }}
+          Detected: {{ 'Minikube (Local)' if is_minikube else 'Standard Cluster (Remote)' }}
+
+    - name: "Get all nodes and their status"
+      command: kubectl get nodes --no-headers
+      register: all_nodes
+      changed_when: false
+
+    - name: "Identify unhealthy nodes (NotReady)"
+      shell: kubectl get nodes --no-headers | awk '$2 != "Ready" {print $1}'
+      register: unhealthy_nodes
+      ignore_errors: yes
+      changed_when: false
+
+    - name: "Display node health summary"
+      debug:
+        msg: |
+          🏥 NODE HEALTH SUMMARY
           ======================
-          Total nodes detected: {{ nodes_output.stdout_lines | length }}
+          Total nodes: {{ all_nodes.stdout_lines | length }}
           Unhealthy nodes: {{ unhealthy_nodes.stdout_lines | length }}
           {% if unhealthy_nodes.stdout_lines | length > 0 %}
           ⚠️ Affected nodes: {{ unhealthy_nodes.stdout_lines | join(', ') }}
           {% else %}
-          ✅ All nodes are healthy!
+          ✅ All nodes are healthy.
           {% endif %}
 
-    - name: "Confirm restart if unhealthy nodes found"
+    - name: "Ask for confirmation if auto_restart disabled"
       pause:
         prompt: |
-          🚨 Unhealthy nodes detected: {{ unhealthy_nodes.stdout_lines | join(', ') }}
-          Proceed with draining and restarting these nodes?
-          Type 'YES' to confirm:
+          ⚠️ Unhealthy nodes detected: {{ unhealthy_nodes.stdout_lines | join(', ') }}
+          Proceed with node restart? (Type 'YES' to confirm)
         echo: yes
       when:
         - unhealthy_nodes.stdout_lines | length > 0
         - not auto_restart
 
-    - name: "Perform node recovery sequence"
+    - name: "Perform node recovery process"
       when: unhealthy_nodes.stdout_lines | length > 0
       block:
 
@@ -73,32 +88,30 @@
           loop: "{{ unhealthy_nodes.stdout_lines }}"
           ignore_errors: yes
 
-        - name: "Step 3: Restart unhealthy nodes"
+        - name: "Step 3: Restart nodes based on environment"
           block:
-
-            - name: "Restart via SSH (production mode)"
+            - name: "Restart Minikube (Local Environment)"
               shell: |
-                echo "Restarting node {{ item }} via SSH..."
+                echo "🔄 Restarting Minikube cluster..."
+                minikube stop && minikube start
+              when: is_minikube
+              ignore_errors: yes
+
+            - name: "Restart via SSH (Cluster Environment)"
+              shell: |
+                echo "🔄 Restarting remote node {{ item }} via SSH..."
+                {% if not simulate_ssh_restart %}
                 ssh -o StrictHostKeyChecking=no {{ item }} 'sudo reboot'
-              loop: "{{ unhealthy_nodes.stdout_lines }}"
-              when: not simulate_restart
-              ignore_errors: yes
-
-            - name: "Simulate restart (safe mode)"
-              shell: |
-                echo "Simulating restart for node {{ item }}..."
+                {% else %}
+                echo "Simulating SSH reboot for {{ item }}..."
                 sleep 5
+                {% endif %}
               loop: "{{ unhealthy_nodes.stdout_lines }}"
-              when: simulate_restart
+              when: not is_minikube
               ignore_errors: yes
-
-          rescue:
-            - debug:
-                msg: "⚠️ Restart step failed — continuing to verification."
 
         - name: "Step 4: Wait for nodes to recover"
-          shell: |
-            kubectl wait --for=condition=Ready node/{{ item }} --timeout={{ restart_timeout }}s
+          shell: kubectl wait --for=condition=Ready node/{{ item }} --timeout={{ restart_timeout }}s
           loop: "{{ unhealthy_nodes.stdout_lines }}"
           ignore_errors: yes
 
@@ -109,21 +122,21 @@
 
         - name: "Step 6: Verify node readiness"
           command: kubectl get node {{ item }} -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
-          register: node_status
+          register: recovery_status
           loop: "{{ unhealthy_nodes.stdout_lines }}"
           ignore_errors: yes
 
-    - name: "Display final recovery summary"
+    - name: "Display recovery summary"
       debug:
         msg: |
           ✅ NODE RECOVERY SUMMARY
           ==========================
           {% if unhealthy_nodes.stdout_lines | length == 0 %}
-          🌿 All nodes were healthy — no action taken.
+          🌿 All nodes healthy — no restart required.
           {% else %}
           🩺 Nodes processed: {{ unhealthy_nodes.stdout_lines | join(', ') }}
-          {% for result in node_status.results %}
-          🔹 {{ result.item }} → {{ result.stdout | default('UNKNOWN') }}
+          {% for node in recovery_status.results %}
+          🔹 {{ node.item }} → {{ node.stdout | default('UNKNOWN') }}
           {% endfor %}
-          ✅ Recovery completed.
+          ✅ Recovery completed successfully.
           {% endif %}
