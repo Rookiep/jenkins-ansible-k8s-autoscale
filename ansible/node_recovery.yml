@@ -75,4 +75,5 @@
 
     - name: 🧾 Show final cluster status
       debug:
-        var: final_status.stdout_lines 
+        var: final_status.stdout_lines
+        
