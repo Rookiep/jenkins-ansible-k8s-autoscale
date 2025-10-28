@@ -1,11 +1,12 @@
 ---
 - name: Kubernetes Node Auto-Recovery (Minikube or Cluster)
   hosts: localhost
-  connection: local   # Prevents SSH; uses local execution
+  connection: local
   gather_facts: yes
 
   vars:
-  kubeconfig_path: "/home/jenkins/.kube/config"
+    # Auto-detect kubeconfig based on environment
+    kubeconfig_path: "{{ lookup('env', 'KUBECONFIG') | default('/home/jenkins/.kube/config', true) }}"
 
   tasks:
     - name: Check Kubernetes cluster accessibility
