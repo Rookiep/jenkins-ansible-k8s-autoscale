@@ -1,31 +1,61 @@
-- name: Restart unhealthy Kubernetes nodes (Minikube-focused)
+---
+- name: Kubernetes Node Health Check and Recovery
   hosts: localhost
   gather_facts: false
+  vars:
+    node_timeout: 60
+
   tasks:
-    - name: Get Kubernetes nodes
-      command: kubectl get nodes --no-headers
-      register: nodes_out
+    - name: Check Minikube status
+      command: minikube status
+      register: minikube_status
+      ignore_errors: yes
+      changed_when: false
 
-    - name: Find nodes not ready
+    - name: Parse node status
       set_fact:
-        bad_nodes: "{{ nodes_out.stdout_lines
-                       | select('search','NotReady')
-                       | map('split')
-                       | map('first')
-                       | list }}"
+        bad_nodes: []
+      when: minikube_status is failed or 'Stopped' in minikube_status.stdout
 
-    - name: Print bad nodes
-      debug:
-        msg: "Unhealthy nodes: {{ bad_nodes }}"
-      when: bad_nodes | length > 0
+    - name: Start Minikube if stopped
+      command: minikube start
+      when: minikube_status is failed or 'Stopped' in minikube_status.stdout
+
+    - name: Check Kubernetes nodes
+      command: kubectl get nodes
+      register: k8s_nodes
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Check node conditions
+      command: kubectl describe node minikube
+      register: node_info
+      when: k8s_nodes is succeeded
+      ignore_errors: yes
 
     - name: Restart unhealthy minikube nodes
-      when: bad_nodes | length > 0
-      loop: "{{ bad_nodes }}"
-      vars:
-        node_name: "{{ item }}"
       block:
-        - name: Stop minikube node
-          command: minikube node stop {{ item }}
-        - name: Start minikube node
-          command: minikube node start {{ item }}
+        - name: Stop minikube
+          command: minikube stop
+          ignore_errors: yes
+
+        - name: Start minikube
+          command: minikube start
+          ignore_errors: yes
+      when: 
+        - k8s_nodes is failed
+        - or
+        - "'Ready' not in node_info.stdout"
+        - "'NotReady' in node_info.stdout"
+
+    - name: Verify cluster health
+      command: kubectl cluster-info
+      register: cluster_health
+      ignore_errors: yes
+
+    - name: Display recovery status
+      debug:
+        msg: |
+          Minikube Status: {{ minikube_status.stdout if minikube_status is succeeded else 'Failed' }}
+          Kubernetes Nodes: {{ k8s_nodes.stdout if k8s_nodes is succeeded else 'Unavailable' }}
+          Cluster Health: {{ cluster_health.stdout if cluster_health is succeeded else 'Unhealthy' }}
