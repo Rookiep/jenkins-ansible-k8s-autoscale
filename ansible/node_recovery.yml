@@ -1,208 +1,124 @@
----
-- name: "Kubernetes Node Health Check and Auto-Restart"
+- name: "EMERGENCY Node Recovery - Force Ready State"
   hosts: localhost
-  gather_facts: true
-  vars:
-    auto_restart: true  # Set to false if you want manual confirmation
-    restart_timeout: 300
-
+  gather_facts: false
+  
   tasks:
-    - name: "Check cluster accessibility"
-      command: kubectl cluster-info
-      register: cluster_status
-      ignore_errors: yes
-      changed_when: false
-
-    - name: "Initialize all variables"
-      set_fact:
-        unhealthy_nodes: []
-        all_nodes_count: 0
-        cluster_accessible: "{{ cluster_status is succeeded }}"
-
-    - name: "Get all nodes status if cluster accessible"
-      shell: |
-        kubectl get nodes --no-headers -o wide
-      register: all_nodes
-      ignore_errors: yes
-      changed_when: false
-      when: cluster_status is succeeded
-
-    - name: "Update node count if available"
-      set_fact:
-        all_nodes_count: "{{ all_nodes.stdout_lines | length }}"
-      when: cluster_status is succeeded and all_nodes is succeeded
-
-    - name: "Identify unhealthy nodes if cluster accessible"
-      shell: |
-        kubectl get nodes --no-headers | awk '$2 != "Ready" {print $1}'
-      register: unhealthy_nodes_result
-      ignore_errors: yes
-      changed_when: false
-      when: cluster_status is succeeded
-
-    - name: "Update unhealthy nodes list"
-      set_fact:
-        unhealthy_nodes: "{{ unhealthy_nodes_result.stdout_lines }}"
-      when: 
-        - cluster_status is succeeded
-        - unhealthy_nodes_result is succeeded
-
-    - name: "Display initial health status"
+    - name: "Display current NOTREADY state"
+      shell: kubectl get nodes
+      register: current_status
+      
+    - name: "Show problem state"
       debug:
         msg: |
-          🏥 KUBERNETES NODE HEALTH REPORT
-          ================================
-          📅 Timestamp: {{ ansible_date_time.iso8601 }}
-          🔗 Cluster Access: {{ "HEALTHY" if cluster_status is succeeded else "UNAVAILABLE" }}
-          📊 Total Nodes: {{ all_nodes_count }}
-          ⚠️ Unhealthy Nodes: {{ unhealthy_nodes | length }}
-          {% if unhealthy_nodes | length > 0 %}
-          🔴 Unhealthy Nodes: {{ unhealthy_nodes | join(', ') }}
-          {% endif %}
-          {% if cluster_status is failed %}
-          ❌ Cannot access Kubernetes cluster
-          💡 Solution: Configure kubectl or start Kubernetes cluster
-          {% endif %}
+          🔴 CURRENT STATE - NODE NOTREADY
+          ===============================
+          {{ current_status.stdout }}
 
-    - name: "Confirm node restart for unhealthy nodes"
-      pause:
-        prompt: |
-          🚨 NODE RESTART CONFIRMATION REQUIRED
-          ====================================
-          Unhealthy nodes detected: {{ unhealthy_nodes | join(', ') }}
-          
-          This will perform automated node restart with:
-          1. ✅ Cordon nodes (prevent new pods)
-          2. ✅ Drain nodes (safely evict pods)
-          3. 🔄 Restart nodes
-          4. ⏱️ Wait for readiness ({{ restart_timeout }}s)
-          5. ✅ Uncordon nodes (allow scheduling)
-          
-          Type 'YES' to proceed with node restart:
-        echo: yes
-      when: 
-        - unhealthy_nodes | length > 0 
-        - cluster_status is succeeded
-        - not auto_restart
+    - name: "Step 1: Check what's actually running in minikube"
+      shell: |
+        echo "=== Minikube Status ==="
+        minikube status
+        echo ""
+        echo "=== Kubelet Status ==="
+        minikube ssh "sudo systemctl status kubelet --no-pager" || echo "Kubelet not running"
+        echo ""
+        echo "=== Containerd Status ==="
+        minikube ssh "sudo systemctl status containerd --no-pager" || echo "Containerd not running"
+      register: service_status
+      ignore_errors: yes
 
-    - name: "Execute node restart procedure"
+    - name: "Display service status"
+      debug:
+        msg: |
+          🔧 SERVICE STATUS ANALYSIS
+          =========================
+          {{ service_status.stdout }}
+
+    - name: "Step 2: FORCE RESTART - Stop everything"
       block:
-        - name: "Step 1: Cordon unhealthy nodes"
+        - name: "Stop minikube completely"
+          command: minikube stop
+          ignore_errors: yes
+          
+        - name: "Wait for complete stop"
+          pause:
+            seconds: 10
+            
+        - name: "Kill any remaining processes"
           shell: |
-            kubectl cordon "{{ item }}"
-          loop: "{{ unhealthy_nodes }}"
+            minikube ssh "sudo pkill -f kubelet || true"
+            minikube ssh "sudo pkill -f containerd || true"
           ignore_errors: yes
 
-        - name: "Step 2: Drain nodes safely"
-          shell: |
-            kubectl drain "{{ item }}" --ignore-daemonsets --delete-emptydir-data --force --grace-period=300
-          loop: "{{ unhealthy_nodes }}"
+    - name: "Step 3: FORCE RESTART - Start everything fresh"
+      block:
+        - name: "Start minikube"
+          command: minikube start
           ignore_errors: yes
-
-        - name: "Step 3: Restart nodes"
-          block:
-            - name: "Restart using Minikube"
-              shell: |
-                minikube node stop && minikube node start
-              when: "'minikube' in unhealthy_nodes[0]"
-              ignore_errors: yes
-
-            - name: "Restart using system reboot"
-              shell: |
-                echo "Simulating restart of node: {{ item }}"
-                # Actual command would be: ssh {{ item }} 'sudo reboot'
-                sleep 10
-              loop: "{{ unhealthy_nodes }}"
-              when: "'minikube' not in unhealthy_nodes[0]"
-              ignore_errors: yes
-
-        - name: "Step 4: Wait for nodes to become Ready"
+          register: start_result
+          
+        - name: "Wait for initialization"
+          pause:
+            seconds: 30
+            
+        - name: "Force start kubelet if needed"
           shell: |
-            kubectl wait --for=condition=Ready node/{{ item }} --timeout={{ restart_timeout }}s
-          loop: "{{ unhealthy_nodes }}"
+            minikube ssh "sudo systemctl daemon-reload"
+            minikube ssh "sudo systemctl start containerd"
+            minikube ssh "sudo systemctl start kubelet"
           ignore_errors: yes
+          when: start_result.rc != 0
 
-        - name: "Step 5: Uncordon recovered nodes"
+    - name: "Step 4: Wait for node to become Ready"
+      shell: |
+        echo "⏳ Waiting for node recovery..."
+        for i in {1..40}; do
+          if kubectl get nodes minikube -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null | grep -q "True"; then
+            echo "✅ SUCCESS: Node is now Ready!"
+            kubectl get nodes -o wide
+            exit 0
+          fi
+          echo "Still waiting... ($i/40)"
+          sleep 3
+        done
+        echo "❌ FAILED: Node still not ready after timeout"
+        kubectl get nodes
+        exit 1
+      register: recovery_wait
+      ignore_errors: yes
+
+    - name: "Step 5: Nuclear option if still not working"
+      block:
+        - name: "Complete cluster reset"
           shell: |
-            kubectl uncordon "{{ item }}"
-          loop: "{{ unhealthy_nodes }}"
+            minikube delete
+            minikube start
           ignore_errors: yes
+          when: recovery_wait.rc != 0
+          
+        - name: "Wait after nuclear reset"
+          pause:
+            seconds: 30
 
-        - name: "Verify node recovery"
-          shell: |
-            kubectl get node "{{ item }}" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
-          loop: "{{ unhealthy_nodes }}"
-          register: recovery_status
-          ignore_errors: yes
+    - name: "Step 6: Final verification"
+      shell: |
+        echo "=== FINAL STATUS ==="
+        kubectl get nodes -o wide
+        echo ""
+        echo "=== NODE DETAILS ==="
+        kubectl describe node minikube | grep -A 10 Conditions
+      register: final_status
+      ignore_errors: yes
 
-      when: 
-        - unhealthy_nodes | length > 0
-        - cluster_status is succeeded
-        - auto_restart or (not auto_restart and unhealthy_nodes | length > 0)
-
-    - name: "Display restart results"
+    - name: "Display final results"
       debug:
         msg: |
-          🔄 NODE RESTART RESULTS
-          ======================
-          📅 Timestamp: {{ ansible_date_time.iso8601 }}
-          🔴 Nodes Attempted: {{ unhealthy_nodes | length }}
-          ✅ Restart Procedure: {{ "COMPLETED" if unhealthy_nodes | length > 0 else "NOT NEEDED" }}
-          {% if recovery_status is defined %}
-          📊 Recovery Status: 
-          {% for result in recovery_status.results %}
-          - {{ result.item }}: {{ result.stdout | default('UNKNOWN') }}
-          {% endfor %}
-          {% endif %}
-
-    - name: "Provide setup instructions for missing cluster"
-      debug:
-        msg: |
-          🔧 CLUSTER SETUP INSTRUCTIONS
-          =============================
-          To enable Kubernetes functionality:
+          🎯 RECOVERY RESULTS
+          ==================
+          {{ final_status.stdout }}
           
-          1. Install Minikube:
-             curl -LO https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
-             sudo install minikube-linux-amd64 /usr/local/bin/minikube
-          
-          2. Start Kubernetes cluster:
-             minikube start
-          
-          3. Verify cluster:
-             kubectl get nodes
-          
-          4. Configure kubectl if using remote cluster
-      when: cluster_status is failed
-
-    - name: "No unhealthy nodes message"
-      debug:
-        msg: |
-          ✅ ALL NODES HEALTHY
-          ===================
-          No unhealthy nodes detected at {{ ansible_date_time.iso8601 }}
-          All Kubernetes nodes are in Ready state
-          System is operating normally
-      when: unhealthy_nodes | length == 0 and cluster_status is succeeded
-
-    - name: "Final summary report"
-      debug:
-        msg: |
-          📋 INFRASTRUCTURE HEALTH SUMMARY
-          ================================
-          🏁 Status: HEALTH CHECK COMPLETED
-          ⏱️ Timestamp: {{ ansible_date_time.iso8601 }}
-          🔗 Cluster Status: {{ "OPERATIONAL" if cluster_status is succeeded else "SETUP REQUIRED" }}
-          📊 Node Health: {{ "ALL HEALTHY" if unhealthy_nodes | length == 0 else "MAINTENANCE PERFORMED" }}
-          🔄 Restart Actions: {{ "EXECUTED" if unhealthy_nodes | length > 0 else "NOT NEEDED" }}
-          
-          {% if cluster_status is succeeded %}
-          ✅ Kubernetes monitoring: ACTIVE
-          ✅ Node health checks: OPERATIONAL
-          ✅ Auto-recovery: {{ "EXECUTED" if unhealthy_nodes | length > 0 else "READY" }}
+          {% if recovery_wait.rc == 0 %}
+          ✅ SUCCESS: Node recovery completed!
           {% else %}
-          🔄 Kubernetes: SETUP PENDING
-          💡 Next: Install and configure Kubernetes cluster
+          ❌ FAILED: Node still not ready - manual intervention required
           {% endif %}
-          
-          🎯 CONCLUSION: Pipeline infrastructure is fully operational!
