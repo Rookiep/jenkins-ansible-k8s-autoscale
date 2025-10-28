@@ -14,11 +14,11 @@ pipeline {
             }
         }
 
-        stage('Clone Repository') {
-            steps {
-                git branch: 'main', url: 'https://github.com/Rookiep/jenkins-ansible-k8s-autoscale.git'
-            }
-        }
+      stage('Clone Repository') {
+           steps {
+        git branch: 'main', url: 'https://github.com/Rookiep/jenkins-ansible-k8s-autoscale.git'
+    }
+}
 
   stage('Install Prerequisites') {
     steps {
