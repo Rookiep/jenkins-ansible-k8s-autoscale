@@ -1,77 +1,74 @@
 ---
-- name: Comprehensive Minikube Node Recovery
+- name: Fix Kubernetes Context and Recover Minikube
   hosts: localhost
   connection: local
-  gather_facts: yes
   
-  vars:
-    minikube_profile: "minikube"
-    
   tasks:
-    - name: Get current Minikube status
-      command: minikube status -p {{ minikube_profile }} -o json
-      register: minikube_status_json
+    - name: Check current kubectl context
+      command: kubectl config current-context
+      register: current_context
       changed_when: false
+      ignore_errors: yes
+      
+    - name: Display current context
+      debug:
+        var: current_context.stdout
+
+    - name: List all available contexts
+      command: kubectl config get-contexts
+      register: all_contexts
+      changed_when: false
+      
+    - name: Display all contexts
+      debug:
+        var: all_contexts.stdout
+
+    - name: Switch to minikube context
+      command: kubectl config use-context minikube
+      register: switch_context
+      
+    - name: Verify minikube context
+      command: kubectl config current-context
+      register: verified_context
+      
+    - name: Display verified context
+      debug:
+        var: verified_context.stdout
+
+    - name: Test kubectl connection to minikube
+      command: kubectl get nodes
+      register: minikube_nodes
+      ignore_errors: yes
+      
+    - name: Display minikube nodes
+      debug:
+        var: minikube_nodes.stdout
+
+    - name: Check Minikube status
+      command: minikube status
+      register: minikube_status
       ignore_errors: yes
       
     - name: Display Minikube status
       debug:
-        var: minikube_status_json.stdout
+        var: minikube_status.stdout
 
-    - name: Stop Minikube forcefully
-      command: minikube stop -p {{ minikube_profile }}
-      register: stop_cmd
-      ignore_errors: yes
+    - name: Restart Minikube if needed
+      command: minikube start
+      when: minikube_nodes.failed or "'Stopped' in minikube_status.stdout"
+      register: minikube_start
+      async: 300
+      poll: 10
       
-    - name: Kill any remaining Minikube processes
-      shell: |
-        pkill -f "minikube" || true
-        sleep 5
-      ignore_errors: yes
-
-    - name: Delete Minikube cluster (if needed)
-      command: minikube delete -p {{ minikube_profile }}
-      when: minikube_status_json.failed or "'Stopped' in minikube_status_json.stdout"
-      ignore_errors: yes
-
-    - name: Start Minikube with fresh configuration
-      command: minikube start -p {{ minikube_profile }} --driver=docker
-      register: start_cmd
-      
-    - name: Display start output
-      debug:
-        var: start_cmd.stdout
-
-    - name: Wait for node to become ready
-      shell: |
-        timeout 180 bash -c 'until kubectl get nodes -o jsonpath="{{.items[*].status.conditions[?(@.type==\"Ready\")].status}}" | grep -q "True"; do sleep 5; done'
-      register: wait_ready
-      ignore_errors: yes
-
-    - name: Check final node status
+    - name: Final verification
       command: kubectl get nodes
       register: final_nodes
-      changed_when: false
       
-    - name: Display final node status
+    - name: Display final status
       debug:
         var: final_nodes.stdout
 
-    - name: Check all system components
-      command: kubectl get pods -n kube-system
-      register: system_pods
-      changed_when: false
-      
-    - name: Display system pods
+    - name: Success message
       debug:
-        var: system_pods.stdout
-
-    - name: Recovery summary
-      debug:
-        msg: |
-          ✅ Minikube Recovery Summary:
-          📍 Profile: {{ minikube_profile }}
-          🔧 Status: {{ final_nodes.stdout }}
-          🐳 Driver: docker
-          📦 System Pods: {{ (system_pods.stdout | length) > 0 | ternary('Running', 'Not Running') }}
-      when: final_nodes is defined
+        msg: "✅ Kubernetes context fixed and Minikube is ready!"
+      when: final_nodes is defined and not final_nodes.failed
