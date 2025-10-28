@@ -1,175 +1,124 @@
-- name: "Kubernetes Node Health Check - Fixed Logic"
+- name: "EMERGENCY Node Recovery - Force Ready State"
   hosts: localhost
   gather_facts: false
-  vars:
-    cluster_timeout: 5
-    
+  
   tasks:
-    - name: "Check if kubectl is available"
-      command: which kubectl
-      register: kubectl_check
-      ignore_errors: yes
-      changed_when: false
+    - name: "Display current NOTREADY state"
+      shell: kubectl get nodes
+      register: current_status
       
-    - name: "Check Kubernetes cluster accessibility"
+    - name: "Show problem state"
+      debug:
+        msg: |
+          🔴 CURRENT STATE - NODE NOTREADY
+          ===============================
+          {{ current_status.stdout }}
+
+    - name: "Step 1: Check what's actually running in minikube"
       shell: |
-        timeout {{ cluster_timeout }} kubectl get nodes >/dev/null 2>&1 && echo "ACCESSIBLE" || echo "INACCESSIBLE"
-      register: cluster_check
+        echo "=== Minikube Status ==="
+        minikube status
+        echo ""
+        echo "=== Kubelet Status ==="
+        minikube ssh "sudo systemctl status kubelet --no-pager" || echo "Kubelet not running"
+        echo ""
+        echo "=== Containerd Status ==="
+        minikube ssh "sudo systemctl status containerd --no-pager" || echo "Containerd not running"
+      register: service_status
       ignore_errors: yes
-      changed_when: false
-      
-    - name: "Display cluster status"
+
+    - name: "Display service status"
       debug:
         msg: |
-          🔍 KUBERNETES CLUSTER STATUS
-          ============================
-          Kubectl Available: {{ "✅ YES" if kubectl_check.rc == 0 else "❌ NO" }}
-          Cluster Accessible: {{ cluster_check.stdout }}
-          
-          {% if cluster_check.rc != 0 %}
-          💡 Running in SIMULATION MODE (Jenkins environment)
-          {% else %}
-          💡 Running in REAL RECOVERY MODE (Kubernetes accessible)
-          {% endif %}
+          🔧 SERVICE STATUS ANALYSIS
+          =========================
+          {{ service_status.stdout }}
 
-    - name: "SIMULATION MODE - Show demo workflow"
+    - name: "Step 2: FORCE RESTART - Stop everything"
       block:
-        - name: "Display simulation header"
-          debug:
-            msg: |
-              🔄 SIMULATION MODE - NODE RECOVERY WORKFLOW
-              ===========================================
-              Demonstrating automated node recovery procedure...
-              
-              In production, this would:
-              1. Monitor node health
-              2. Detect NotReady nodes
-              3. Execute recovery procedures
-              4. Verify node restoration
-
-        - name: "Simulate node health check"
-          debug:
-            msg: "✅ Step 1: Checking node health status..."
-
-        - name: "Simulate NotReady detection"
-          debug:
-            msg: "✅ Step 2: No unhealthy nodes detected (all nodes healthy)"
-
-        - name: "Simulate recovery readiness"
-          debug:
-            msg: "✅ Step 3: Recovery system operational and ready"
-
-        - name: "Display simulation completion"
-          debug:
-            msg: |
-              🎯 SIMULATION COMPLETED SUCCESSFULLY
-              ===================================
-              
-              Automated node recovery system is:
-              ✅ Properly configured
-              ✅ Ready for production use
-              ✅ Can handle real node failures
-              
-              In a real Kubernetes environment, this system would:
-              - Automatically detect node failures
-              - Safely evacuate pods from unhealthy nodes
-              - Restart failed nodes
-              - Restore cluster health
-              
-              💡 This simulation proves the Ansible automation works!
-
-      when: cluster_check.rc != 0
-
-    - name: "REAL RECOVERY MODE - Execute actual recovery"
-      block:
-        - name: "Get node status"
-          command: kubectl get nodes
-          register: node_status
+        - name: "Stop minikube completely"
+          command: minikube stop
           ignore_errors: yes
           
-        - name: "Check for NotReady nodes"
+        - name: "Wait for complete stop"
+          pause:
+            seconds: 10
+            
+        - name: "Kill any remaining processes"
           shell: |
-            kubectl get nodes --no-headers | grep -v Ready | awk '{print $1}' || echo "ALL_HEALTHY"
-          register: notready_nodes
+            minikube ssh "sudo pkill -f kubelet || true"
+            minikube ssh "sudo pkill -f containerd || true"
           ignore_errors: yes
-          changed_when: false
+
+    - name: "Step 3: FORCE RESTART - Start everything fresh"
+      block:
+        - name: "Start minikube"
+          command: minikube start
+          ignore_errors: yes
+          register: start_result
           
-        - name: "Display node health status"
-          debug:
-            msg: |
-              📊 NODE HEALTH STATUS
-              ====================
-              {{ node_status.stdout }}
-              
-              NotReady Nodes: {{ notready_nodes.stdout }}
+        - name: "Wait for initialization"
+          pause:
+            seconds: 30
+            
+        - name: "Force start kubelet if needed"
+          shell: |
+            minikube ssh "sudo systemctl daemon-reload"
+            minikube ssh "sudo systemctl start containerd"
+            minikube ssh "sudo systemctl start kubelet"
+          ignore_errors: yes
+          when: start_result.rc != 0
 
-        - name: "Execute recovery if unhealthy nodes found"
-          block:
-            - name: "Cordon unhealthy nodes"
-              command: "kubectl cordon {{ item }}"
-              loop: "{{ notready_nodes.stdout_lines }}"
-              ignore_errors: yes
-              
-            - name: "Restart minikube node"
-              command: minikube stop && minikube start
-              ignore_errors: yes
-              when: "'minikube' in notready_nodes.stdout"
-              
-            - name: "Wait for recovery"
-              pause:
-                seconds: 30
-                
-            - name: "Uncordon nodes"
-              command: "kubectl uncordon {{ item }}"
-              loop: "{{ notready_nodes.stdout_lines }}"
-              ignore_errors: yes
-              
-            - name: "Verify recovery"
-              command: kubectl get nodes
-              register: recovery_status
-              ignore_errors: yes
-              
-            - name: "Display recovery results"
-              debug:
-                msg: |
-                  ✅ REAL RECOVERY COMPLETED
-                  ========================
-                  Final node status:
-                  {{ recovery_status.stdout }}
-                  
-                  Recovery: SUCCESS
-                  
-          when: "'ALL_HEALTHY' not in notready_nodes.stdout"
+    - name: "Step 4: Wait for node to become Ready"
+      shell: |
+        echo "⏳ Waiting for node recovery..."
+        for i in {1..40}; do
+          if kubectl get nodes minikube -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null | grep -q "True"; then
+            echo "✅ SUCCESS: Node is now Ready!"
+            kubectl get nodes -o wide
+            exit 0
+          fi
+          echo "Still waiting... ($i/40)"
+          sleep 3
+        done
+        echo "❌ FAILED: Node still not ready after timeout"
+        kubectl get nodes
+        exit 1
+      register: recovery_wait
+      ignore_errors: yes
 
-        - name: "No recovery needed - all nodes healthy"
-          debug:
-            msg: |
-              ✅ ALL NODES HEALTHY
-              ===================
-              No unhealthy nodes detected - cluster is operating normally.
-              Automated recovery system is ready but not needed.
-              
-          when: "'ALL_HEALTHY' in notready_nodes.stdout"
+    - name: "Step 5: Nuclear option if still not working"
+      block:
+        - name: "Complete cluster reset"
+          shell: |
+            minikube delete
+            minikube start
+          ignore_errors: yes
+          when: recovery_wait.rc != 0
+          
+        - name: "Wait after nuclear reset"
+          pause:
+            seconds: 30
 
-      when: cluster_check.rc == 0
+    - name: "Step 6: Final verification"
+      shell: |
+        echo "=== FINAL STATUS ==="
+        kubectl get nodes -o wide
+        echo ""
+        echo "=== NODE DETAILS ==="
+        kubectl describe node minikube | grep -A 10 Conditions
+      register: final_status
+      ignore_errors: yes
 
-    - name: "Final summary"
+    - name: "Display final results"
       debug:
         msg: |
-          🎯 ANSIBLE NODE RECOVERY SYSTEM - SUMMARY
-          ========================================
-          Execution Mode: {{ "REAL RECOVERY" if cluster_check.rc == 0 else "SIMULATION" }}
-          Status: COMPLETED SUCCESSFULLY
-          Result: ✅ OPERATIONAL
+          🎯 RECOVERY RESULTS
+          ==================
+          {{ final_status.stdout }}
           
-          {% if cluster_check.rc == 0 %}
-          💡 Real Kubernetes cluster monitoring active
+          {% if recovery_wait.rc == 0 %}
+          ✅ SUCCESS: Node recovery completed!
           {% else %}
-          💡 Simulation completed - system ready for production
+          ❌ FAILED: Node still not ready - manual intervention required
           {% endif %}
-          
-          ✅ This automated system can:
-          - Detect node health issues
-          - Execute recovery procedures  
-          - Restore cluster operations
-          - Run in CI/CD pipelines
