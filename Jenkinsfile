@@ -30,6 +30,31 @@ pipeline {
             }
         }
 
+        stage('Setup Kubeconfig') {
+            steps {
+                sh '''
+                    echo "=== SETTING UP KUBECONFIG ==="
+                    mkdir -p $HOME/.kube
+
+                    # Try to detect kubeconfig from multiple paths
+                    if [ -f "$HOME/.kube/config" ]; then
+                        echo "✅ Using existing kubeconfig at $HOME/.kube/config"
+                    elif [ -f "/root/.kube/config" ]; then
+                        echo "📁 Copying from /root/.kube/config"
+                        cp /root/.kube/config $HOME/.kube/config
+                    elif [ -f "/mnt/c/Users/ACER/.kube/config" ]; then
+                        echo "📁 Copying from Windows path /mnt/c/Users/ACER/.kube/config"
+                        cp /mnt/c/Users/ACER/.kube/config $HOME/.kube/config
+                    else
+                        echo "⚠️ No kubeconfig found. Run 'minikube start' first."
+                    fi
+
+                    echo "=== VERIFYING kubeconfig ==="
+                    cat $HOME/.kube/config || echo "No kubeconfig file detected"
+                '''
+            }
+        }
+
         stage('Install Standalone Python') {
             steps {
                 sh '''
@@ -51,7 +76,6 @@ pipeline {
                     curl -sS https://bootstrap.pypa.io/get-pip.py -o get-pip.py
                     python3 get-pip.py
                     pip3 install ansible
-                    
                     echo "=== VERIFICATION ==="
                     python3 --version
                     pip3 --version
@@ -65,6 +89,7 @@ pipeline {
                 sh '''
                     echo "=== RUNNING NODE RECOVERY PLAYBOOK ==="
                     export PATH="$HOME/python/bin:$PATH"
+                    export KUBECONFIG="$HOME/.kube/config"
 
                     if [ -f "ansible/node_recovery.yml" ]; then
                         echo "🚀 Running Ansible playbook: ansible/node_recovery.yml"
@@ -90,6 +115,3 @@ pipeline {
         }
     }
 }
-
-
-    
