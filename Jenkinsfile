@@ -15,33 +15,17 @@ pipeline {
             }
         }
         
-        stage('Check Available Tools') {
+        stage('Download Pre-compiled Python') {
             steps {
                 sh '''
-                    echo "=== CHECKING AVAILABLE TOOLS ==="
-                    which curl || echo "curl not found"
-                    which wget || echo "wget not found"
-                    which python3 || echo "python3 not found"
-                    which python || echo "python not found"
-                '''
-            }
-        }
-        
-        stage('Install Python from Binary') {
-            steps {
-                sh '''
-                    echo "=== INSTALLING PYTHON USING CURL ==="
+                    echo "=== DOWNLOADING PRE-COMPILED PYTHON ==="
                     
-                    # Download Python using curl
-                    curl -L -o Python-3.9.18.tgz https://www.python.org/ftp/python/3.9.18/Python-3.9.18.tgz
+                    # Download standalone Python binary
+                    curl -L -o python-standalone.tar.gz https://github.com/indygreg/python-build-standalone/releases/download/20230826/cpython-3.9.18+20230826-x86_64-unknown-linux-gnu-install_only.tar.gz
                     
-                    # Extract Python
-                    tar -xzf Python-3.9.18.tgz
-                    cd Python-3.9.18
-                    
-                    # Configure and install in user directory
-                    ./configure --prefix=$HOME/python --enable-optimizations
-                    make && make install
+                    # Extract to home directory
+                    mkdir -p $HOME/python
+                    tar -xzf python-standalone.tar.gz -C $HOME/python --strip-components=1
                     
                     # Verify installation
                     $HOME/python/bin/python3 --version
@@ -55,12 +39,16 @@ pipeline {
                     echo "=== INSTALLING ANSIBLE ==="
                     export PATH="$HOME/python/bin:$PATH"
                     
-                    # Install pip and ansible
+                    # Install pip
                     curl -sS https://bootstrap.pypa.io/get-pip.py -o get-pip.py
                     $HOME/python/bin/python3 get-pip.py
+                    
+                    # Install ansible
                     $HOME/python/bin/pip3 install ansible
                     
-                    # Verify ansible installation
+                    echo "=== VERIFICATION ==="
+                    $HOME/python/bin/python3 --version
+                    $HOME/python/bin/pip3 --version
                     $HOME/python/bin/ansible --version
                 '''
             }
@@ -71,16 +59,9 @@ pipeline {
                 sh '''
                     echo "=== RUNNING ANSIBLE PLAYBOOK ==="
                     export PATH="$HOME/python/bin:$PATH"
-                    cd /var/jenkins_home/workspace/jenkins-ansible-k8s-autoscale
-                    ansible-playbook -i ansible/inventory ansible/playbooks/node-recovery-demo.yml --check -v
+                    ansible-playbook -i ansible/inventory ansible/playbooks/node-recovery-demo.yml --check
                 '''
             }
-        }
-    }
-    
-    post {
-        always {
-            echo "🎉 JENKINS ANSIBLE AUTOMATION COMPLETED!"
         }
     }
 }
