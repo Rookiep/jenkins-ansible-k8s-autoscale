@@ -1,35 +1,78 @@
 ---
-- name: Kubernetes Node Auto-Recovery (Minikube or Cluster)
+- name: 🛠️ Kubernetes Node Health Check and Auto Recovery
   hosts: localhost
   connection: local
-  gather_facts: yes
-
   vars:
-    # Auto-detect kubeconfig based on environment
-    kubeconfig_path: "{{ lookup('env', 'KUBECONFIG') | default('/home/jenkins/.kube/config', true) }}"
+    # Automatically use environment KUBECONFIG or fallback to default
+    kubeconfig_path: "{{ lookup('env', 'KUBECONFIG') | default('~/.kube/config', true) }}"
+    namespace: default
 
   tasks:
-    - name: Check Kubernetes cluster accessibility
-      shell: kubectl cluster-info --kubeconfig {{ kubeconfig_path }}
-      register: cluster_status
-      ignore_errors: yes
-      environment:
-        KUBECONFIG: "{{ kubeconfig_path }}"
-
-    - name: Abort if Kubernetes cluster not accessible
-      fail:
-        msg: |
-          ❌ Kubernetes cluster is not accessible.
-          💡 Run 'minikube start' or check your kubeconfig context.
-      when: cluster_status.rc != 0
-
-    - name: Display cluster info if accessible
+    - name: ✅ Display active kubeconfig path
       debug:
-        msg: "✅ Connected to Kubernetes cluster successfully."
+        msg: "Using kubeconfig from {{ kubeconfig_path }}"
 
-    - name: Restart Kubernetes node (Minikube)
+    - name: 🔍 Verify cluster connectivity
+      shell: kubectl get nodes --kubeconfig {{ kubeconfig_path }}
+      register: cluster_status
+      ignore_errors: true
+
+    - name: 🧾 Show cluster node status output
+      debug:
+        var: cluster_status.stdout_lines
+
+    - name: ⚠️ Check if any node is NotReady
       shell: |
-        echo "🔄 Restarting Minikube node..."
-        minikube stop
-        minikube start
-      when: cluster_status.rc == 0
+        kubectl get nodes --no-headers --kubeconfig {{ kubeconfig_path }} | awk '$2=="NotReady"{print $1}'
+      register: unhealthy_nodes
+      changed_when: false
+
+    - name: 🧠 Display unhealthy nodes
+      debug:
+        var: unhealthy_nodes.stdout_lines
+
+    - name: 🚨 Restart unhealthy Minikube or Docker nodes if found
+      when: unhealthy_nodes.stdout_lines | length > 0
+      block:
+        - name: Detect Kubernetes environment (Minikube or Docker Desktop)
+          shell: |
+            if minikube status >/dev/null 2>&1; then
+              echo "minikube"
+            elif kubectl get nodes | grep docker-desktop >/dev/null 2>&1; then
+              echo "docker-desktop"
+            else
+              echo "unknown"
+            fi
+          register: k8s_env
+          changed_when: false
+
+        - name: Display detected environment
+          debug:
+            msg: "Detected Kubernetes environment: {{ k8s_env.stdout }}"
+
+        - name: Restart Minikube cluster
+          when: k8s_env.stdout == "minikube"
+          shell: |
+            echo "Restarting Minikube..."
+            minikube stop && minikube start
+          register: restart_output
+
+        - name: Restart Docker Desktop Kubernetes
+          when: k8s_env.stdout == "docker-desktop"
+          shell: |
+            echo "Restarting Docker Desktop Kubernetes..."
+            powershell.exe -Command "Restart-Service com.docker.service"
+          register: restart_output
+
+        - name: Display restart output
+          debug:
+            var: restart_output.stdout_lines
+
+    - name: 🟢 Final cluster health check after recovery
+      shell: kubectl get nodes --kubeconfig {{ kubeconfig_path }}
+      register: final_status
+      ignore_errors: true
+
+    - name: 🧾 Show final cluster status
+      debug:
+        var: final_status.stdout_lines 
