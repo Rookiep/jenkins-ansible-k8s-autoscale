@@ -25,8 +25,8 @@ pipeline {
             steps {
                 echo '🔧 Installing kubectl, Python & Ansible if missing...'
                 sh '''
-                    apt-get update -y
-                    apt-get install -y curl python3 python3-pip ansible
+                    sudo apt-get update -y
+                    sudo apt-get install -y curl python3 python3-pip ansible
                     curl -LO "https://storage.googleapis.com/kubernetes-release/release/$(curl -s https://storage.googleapis.com/kubernetes-release/release/stable.txt)/bin/linux/amd64/kubectl"
                     chmod +x kubectl && mv kubectl /usr/local/bin/
                 '''
