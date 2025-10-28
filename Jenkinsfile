@@ -23,12 +23,23 @@ pipeline {
                     pwd
                     ls -la
                     
-                    echo "=== INSTALLING PYTHON3 AND PIP ==="
-                    apt-get update
-                    apt-get install -y python3 python3-pip
+                    echo "=== CHECKING EXISTING PYTHON INSTALLATION ==="
+                    python3 --version || echo "Python3 not available"
+                    pip3 --version || echo "Pip3 not available"
+                '''
+            }
+        }
+        
+        stage('Install Ansible with User Pip') {
+            steps {
+                sh '''
+                    echo "=== INSTALLING ANSIBLE USING GET-PIP ==="
+                    # Download and install pip for user
+                    curl -sS https://bootstrap.pypa.io/get-pip.py -o get-pip.py
+                    python3 get-pip.py --user
                     
-                    echo "=== INSTALLING ANSIBLE ==="
-                    pip3 install ansible
+                    # Install ansible for user
+                    python3 -m pip install --user ansible
                 '''
             }
         }
@@ -38,8 +49,12 @@ pipeline {
                 sh '''
                     echo "=== VERIFYING INSTALLATIONS ==="
                     python3 --version
-                    pip3 --version
-                    ansible --version
+                    python3 -m pip --version
+                    python3 -m ansible --version
+                    
+                    echo "=== ADDING PIP TO PATH ==="
+                    export PATH="$HOME/.local/bin:$PATH"
+                    ansible --version || echo "Ansible not in PATH"
                 '''
             }
         }
@@ -48,8 +63,8 @@ pipeline {
             steps {
                 sh '''
                     echo "=== RUNNING ANSIBLE PLAYBOOK ==="
-                    cd /var/jenkins_home/workspace/jenkins-ansible-k8s-autoscale
-                    ansible-playbook -i inventory playbooks/node-recovery-demo.yml --check
+                    export PATH="$HOME/.local/bin:$PATH"
+                    ansible-playbook -i ansible/inventory ansible/playbooks/node-recovery-demo.yml --check
                 '''
             }
         }
