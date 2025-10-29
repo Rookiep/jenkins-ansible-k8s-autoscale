@@ -5,13 +5,13 @@
   gather_facts: no
 
   vars:
-    # ✅ Use the same kubeconfig Jenkins pipeline sets up
+    # ✅ Jenkins pipeline's kubeconfig path
     kubeconfig_path: "/tmp/jenkins-kube/config"
 
   tasks:
 
     - name: Check Kubernetes cluster status
-      shell: kubectl cluster-info --kubeconfig {{ kubeconfig_path }}
+      shell: kubectl cluster-info
       register: cluster_status
       ignore_errors: yes
       environment:
@@ -35,4 +35,6 @@
         sleep 5
         minikube start
         echo "✅ Minikube restarted successfully."
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
       when: cluster_status.rc == 0
