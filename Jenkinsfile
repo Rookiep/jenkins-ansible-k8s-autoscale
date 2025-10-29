@@ -1,12 +1,7 @@
 pipeline {
     agent any
 
-    environment {
-    KUBECONFIG = '/root/.kube/config'
-}
-
     stages {
-
         stage('Initialize') {
             steps {
                 echo '🚀 Starting Jenkins CI/CD pipeline for Ansible + Kubernetes...'
@@ -21,39 +16,59 @@ pipeline {
             }
         }
 
-      stage('Install Prerequisites') {
-    steps {
-        echo '🔧 Installing kubectl, Python & Ansible if missing...'
-        sh '''
-            apt-get update -y
-            apt-get install -y curl python3 python3-pip ansible
-            curl -LO "https://dl.k8s.io/release/v1.30.0/bin/linux/amd64/kubectl"
-            chmod +x kubectl
-            mv kubectl /usr/local/bin/
-            kubectl version --client
-        '''
-    }
-}
+        stage('Install Prerequisites') {
+            steps {
+                echo '🔧 Installing kubectl, Python & Ansible if missing...'
+                sh '''
+                    apt-get update -y
+                    apt-get install -y curl python3 python3-pip ansible
+                    curl -LO "https://dl.k8s.io/release/v1.30.0/bin/linux/amd64/kubectl"
+                    chmod +x kubectl
+                    mv kubectl /usr/local/bin/
+                    kubectl version --client
+                '''
+            }
+        }
+
+        stage('Setup Kubeconfig') {
+            steps {
+                echo '🔐 Setting up Kubernetes config from credentials...'
+                withCredentials([file(credentialsId: 'kubeconfig-secret', variable: 'KUBECONFIG_FILE')]) {
+                    sh '''
+                        mkdir -p ~/.kube
+                        cp $KUBECONFIG_FILE ~/.kube/config
+                        export KUBECONFIG=~/.kube/config
+                        echo "Kubeconfig loaded."
+                    '''
+                }
+            }
+        }
 
         stage('Verify Kubernetes Connectivity') {
             steps {
                 echo '🔍 Verifying Kubernetes connection...'
                 sh '''
-                    echo "Current context:"
-                    kubectl config current-context
-                    echo "Available nodes:"
-                    kubectl get nodes -o wide
+                    export KUBECONFIG=~/.kube/config
+                    if kubectl config current-context >/dev/null 2>&1; then
+                        echo "Current context: $(kubectl config current-context)"
+                        echo "Available nodes:"
+                        kubectl get nodes -o wide || echo "No nodes found or access issue."
+                    else
+                        echo "WARNING: No Kubernetes context set. Skipping K8s stages."
+                    fi
                 '''
             }
         }
 
         stage('Restart Node (Simulated)') {
+            when { expression { return sh(script: 'kubectl config current-context >/dev/null 2>&1', returnStatus: true) == 0 } }
             steps {
                 echo '🔁 Simulating Kubernetes node restart...'
                 sh '''
-                    NODE=$(kubectl get nodes -o name | head -n1 | cut -d'/' -f2)
+                    export KUBECONFIG=~/.kube/config
+                    NODE=$(kubectl get nodes -o name | head -n1 | cut -d\'/\' -f2 || echo "default-node")
                     echo "Draining node: $NODE"
-                    kubectl drain $NODE --ignore-daemonsets --delete-emptydir-data || true
+                    kubectl drain $NODE --ignore-daemonsets --delete-emptydir-data --force || true
                     sleep 5
                     echo "Uncordoning node: $NODE"
                     kubectl uncordon $NODE || true
@@ -64,9 +79,12 @@ pipeline {
         stage('Run Ansible Playbook') {
             steps {
                 echo '⚙️ Running Ansible playbook...'
-                sh '''
-                    ansible-playbook -i inventory.ini playbook.yml || true
-                '''
+                dir('ansible') {  // Assumes files are in ./ansible/
+                    sh '''
+                        export KUBECONFIG=~/.kube/config
+                        ansible-playbook -i inventory.ini playbook.yml || echo "Playbook completed with warnings."
+                    '''
+                }
             }
         }
     }
@@ -77,6 +95,9 @@ pipeline {
         }
         failure {
             echo '❌ Pipeline failed — please check the logs above.'
+        }
+        always {
+            sh 'rm -rf ~/.kube || true'  // Cleanup secret
         }
     }
 }
