@@ -2,17 +2,34 @@ pipeline {
     agent any
 
     stages {
+
         stage('Initialize') {
             steps {
                 echo '🚀 Starting Jenkins CI/CD pipeline for Ansible + Kubernetes...'
-                sh 'pwd && ls -la'
+                sh '''
+                    echo "Current working directory:"
+                    pwd
+                    echo "Listing workspace contents:"
+                    ls -la
+                '''
             }
         }
 
-        stage('Clean Workspace') {  // NEW: Pre-clone nuke
+        stage('Fix Permissions') {
             steps {
-                echo '🧹 Cleaning workspace to avoid permission issues...'
-                deleteDir()  // Jenkins built-in: Wipes entire workspace
+                echo '🔧 Ensuring correct workspace permissions...'
+                sh '''
+                    echo "Fixing ownership of Jenkins workspace..."
+                    chown -R jenkins:jenkins /var/jenkins_home || true
+                    chmod -R 777 /var/jenkins_home/workspace || true
+                '''
+            }
+        }
+
+        stage('Clean Workspace') {
+            steps {
+                echo '🧹 Cleaning workspace to avoid permission or stale file issues...'
+                deleteDir()  // Jenkins built-in method: wipes the workspace clean
             }
         }
 
@@ -25,7 +42,7 @@ pipeline {
 
         stage('Install Prerequisites') {
             steps {
-                echo '🔧 Installing kubectl, Python & Ansible if missing...'
+                echo '🔧 Installing kubectl, Python, and Ansible if missing...'
                 sh '''
                     apt-get update -y
                     apt-get install -y curl python3 python3-pip ansible
@@ -39,13 +56,14 @@ pipeline {
 
         stage('Setup Kubeconfig') {
             steps {
-                echo '🔐 Setting up Kubernetes config from credentials...'
+                echo '🔐 Setting up Kubernetes configuration from Jenkins credentials...'
                 withCredentials([file(credentialsId: 'kubeconfig-secret', variable: 'KUBECONFIG_FILE')]) {
                     sh '''
                         mkdir -p ~/.kube
                         cp $KUBECONFIG_FILE ~/.kube/config
+                        chmod 600 ~/.kube/config
                         export KUBECONFIG=~/.kube/config
-                        echo "Kubeconfig loaded."
+                        echo "✅ Kubeconfig successfully loaded."
                     '''
                 }
             }
@@ -53,43 +71,46 @@ pipeline {
 
         stage('Verify Kubernetes Connectivity') {
             steps {
-                echo '🔍 Verifying Kubernetes connection...'
+                echo '🔍 Verifying Kubernetes cluster connection...'
                 sh '''
                     export KUBECONFIG=~/.kube/config
                     if kubectl config current-context >/dev/null 2>&1; then
                         echo "Current context: $(kubectl config current-context)"
                         echo "Available nodes:"
-                        kubectl get nodes -o wide || echo "No nodes found or access issue."
+                        kubectl get nodes -o wide || echo "⚠️ No nodes found or access issue."
                     else
-                        echo "WARNING: No Kubernetes context set. Skipping K8s stages."
+                        echo "⚠️ WARNING: No Kubernetes context set — skipping cluster operations."
                     fi
                 '''
             }
         }
 
         stage('Restart Node (Simulated)') {
-            when { expression { return sh(script: 'kubectl config current-context >/dev/null 2>&1', returnStatus: true) == 0 } }
+            when {
+                expression { return sh(script: 'kubectl config current-context >/dev/null 2>&1', returnStatus: true) == 0 }
+            }
             steps {
                 echo '🔁 Simulating Kubernetes node restart...'
                 sh '''
                     export KUBECONFIG=~/.kube/config
-                    NODE=$(kubectl get nodes -o name | head -n1 | cut -d\'/\' -f2 || echo "default-node")
+                    NODE=$(kubectl get nodes -o name | head -n1 | cut -d'/' -f2 || echo "default-node")
                     echo "Draining node: $NODE"
                     kubectl drain $NODE --ignore-daemonsets --delete-emptydir-data --force || true
                     sleep 5
                     echo "Uncordoning node: $NODE"
                     kubectl uncordon $NODE || true
+                    echo "✅ Node restart simulation complete."
                 '''
             }
         }
 
         stage('Run Ansible Playbook') {
             steps {
-                echo '⚙️ Running Ansible playbook...'
+                echo '⚙️ Running Ansible playbook for node recovery...'
                 dir('ansible') {
                     sh '''
                         export KUBECONFIG=~/.kube/config
-                        ansible-playbook -i inventory.ini playbook.yml || echo "Playbook completed with warnings."
+                        ansible-playbook -i inventory.ini playbook.yml || echo "⚠️ Playbook completed with warnings."
                     '''
                 }
             }
@@ -101,13 +122,14 @@ pipeline {
             echo '✅ Pipeline completed successfully!'
         }
         failure {
-            echo '❌ Pipeline failed — please check the logs above.'
+            echo '❌ Pipeline failed — please review logs above.'
         }
         always {
+            echo '🧽 Cleaning up kubeconfig and temporary files...'
             sh '''
                 rm -rf ~/.kube /var/jenkins_home/.kube || true
-                # Attempt perm fix if needed (requires sudo? Skip if non-root)
-                # sudo chown -R $(whoami):$(whoami) $WORKSPACE || true
+                chown -R jenkins:jenkins /var/jenkins_home/workspace || true
+                chmod -R 777 /var/jenkins_home/workspace || true
             '''
         }
     }
