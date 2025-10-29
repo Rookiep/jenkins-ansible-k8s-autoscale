@@ -27,7 +27,6 @@ pipeline {
                             echo "✅ Kubeconfig successfully placed at /tmp/jenkins-kube/config"
                             ls -la /tmp/jenkins-kube
                             
-                            # Set KUBECONFIG environment variable
                             export KUBECONFIG="/tmp/jenkins-kube/config"
                             echo "KUBECONFIG set to: $KUBECONFIG"
                         '''
@@ -61,10 +60,8 @@ pipeline {
                     export KUBECONFIG="/tmp/jenkins-kube/config"
                     echo "Testing kubectl access with the configured kubeconfig..."
                     
-                    # Test basic connectivity
                     if kubectl cluster-info 2>/dev/null; then
                         echo "✅ Successfully connected to Kubernetes cluster"
-                        echo "=== Cluster Information ==="
                         kubectl get nodes
                     else
                         echo "❌ Cannot connect to Kubernetes cluster"
@@ -81,55 +78,45 @@ pipeline {
             steps {
                 echo '⚙️ Fixing and running Ansible playbook...'
                 sh '''
-                    export KUBECONFIG="/tmp/jenkins-kube/config"
-                    
-                    echo "Current directory: $(pwd)"
-                    echo "Ansible playbook contents:"
-                    cat ansible/node_recovery.yml
-                    
-                    # Create a fixed version of the playbook
-                    echo "Creating fixed playbook..."
-                    cat > ansible/node_recovery_fixed.yml << 'EOF'
+                    export KUBECONFIG=/tmp/jenkins-kube/config
+                    echo "🧩 Switching context to docker-desktop..."
+                    kubectl config use-context docker-desktop --kubeconfig=$KUBECONFIG || echo "⚠️ docker-desktop context not found."
+
+                    echo "🔍 Testing cluster access..."
+                    kubectl cluster-info || echo "❌ Still cannot connect — check if Docker Desktop Kubernetes is enabled."
+
+                    echo "📄 Creating fixed Ansible playbook..."
+                    cat <<'EOF' > ansible/node_recovery_fixed.yml
 ---
-- name: Kubernetes Node Auto-Recovery
+- name: Kubernetes Node Auto-Recovery (Docker Desktop)
   hosts: localhost
   connection: local
+  gather_facts: no
+
   vars:
     kubeconfig_path: "/tmp/jenkins-kube/config"
-    node_name: "minikube"
 
   tasks:
     - name: Check Kubernetes cluster status
-      shell: "kubectl cluster-info --kubeconfig {{ kubeconfig_path }}"
+      shell: kubectl cluster-info --kubeconfig {{ kubeconfig_path }}
       register: cluster_status
       ignore_errors: yes
-
-    - name: Display cluster status
-      debug:
-        msg: "Cluster status: {{ cluster_status.rc }}"
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
 
     - name: Abort if Kubernetes cluster not accessible
       fail:
-        msg: "❌ Cluster unreachable. Check kubeconfig at {{ kubeconfig_path }}"
+        msg: |
+          ❌ Cluster unreachable.
+          💡 Ensure Docker Desktop Kubernetes is enabled.
       when: cluster_status.rc != 0
 
-    - name: Get node status
-      shell: "kubectl get nodes --kubeconfig {{ kubeconfig_path }}"
-      register: nodes_status
-      when: cluster_status.rc == 0
-
-    - name: Display nodes
+    - name: Display successful cluster connection
       debug:
-        msg: "{{ nodes_status.stdout }}"
-      when: cluster_status.rc == 0
-
-    - name: Simulate node recovery (would restart node in production)
-      debug:
-        msg: "✅ Node recovery simulation completed successfully. In production, this would restart node {{ node_name }}"
-      when: cluster_status.rc == 0
+        msg: "✅ Kubernetes cluster reachable using {{ kubeconfig_path }}."
 EOF
 
-                    echo "Running fixed Ansible playbook..."
+                    echo "🚀 Running fixed Ansible playbook..."
                     ansible-playbook -i ansible/inventory.ini ansible/node_recovery_fixed.yml -v
                 '''
             }
