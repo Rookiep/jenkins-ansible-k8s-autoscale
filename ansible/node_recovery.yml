@@ -5,10 +5,11 @@
   gather_facts: no
 
   vars:
-    # ✅ Use the same kubeconfig Jenkins pipeline uses
+    # ✅ Use the same kubeconfig Jenkins pipeline sets up
     kubeconfig_path: "/tmp/jenkins-kube/config"
 
   tasks:
+
     - name: Check Kubernetes cluster status
       shell: kubectl cluster-info --kubeconfig {{ kubeconfig_path }}
       register: cluster_status
