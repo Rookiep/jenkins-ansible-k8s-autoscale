@@ -5,27 +5,10 @@
   gather_facts: no
 
   vars:
-    kubeconfig_candidates:
-      - "/tmp/jenkins-kube/config"        # ✅ Jenkins pipeline temporary kubeconfig
-      - "/home/jenkins/.kube/config"      # fallback (local Jenkins home)
-      - "~/.kube/config"                  # fallback (developer environment)
+    # ✅ Use the same kubeconfig Jenkins pipeline uses
+    kubeconfig_path: "/tmp/jenkins-kube/config"
 
   tasks:
-    - name: Determine valid kubeconfig path
-      set_fact:
-        kubeconfig_path: "{{ item }}"
-      when: lookup('file', item, errors='ignore') != ''
-      loop: "{{ kubeconfig_candidates }}"
-      run_once: true
-
-    - name: Fail if no kubeconfig file found
-      fail:
-        msg: |
-          ❌ No valid kubeconfig found.
-          💡 Ensure Minikube or Docker Desktop Kubernetes is started,
-          and kubeconfig is mounted to /tmp/jenkins-kube/config.
-      when: kubeconfig_path is not defined
-
     - name: Check Kubernetes cluster status
       shell: kubectl cluster-info --kubeconfig {{ kubeconfig_path }}
       register: cluster_status
