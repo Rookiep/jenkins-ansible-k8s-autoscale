@@ -6,8 +6,9 @@
 
   vars:
     kubeconfig_candidates:
-      - "/home/jenkins/.kube/config"
-      - "~/.kube/config"
+      - "/tmp/jenkins-kube/config"        # ✅ Jenkins pipeline temporary kubeconfig
+      - "/home/jenkins/.kube/config"      # fallback (local Jenkins home)
+      - "~/.kube/config"                  # fallback (developer environment)
 
   tasks:
     - name: Determine valid kubeconfig path
@@ -21,7 +22,8 @@
       fail:
         msg: |
           ❌ No valid kubeconfig found.
-          💡 Ensure Minikube or Docker Desktop Kubernetes is started.
+          💡 Ensure Minikube or Docker Desktop Kubernetes is started,
+          and kubeconfig is mounted to /tmp/jenkins-kube/config.
       when: kubeconfig_path is not defined
 
     - name: Check Kubernetes cluster status
