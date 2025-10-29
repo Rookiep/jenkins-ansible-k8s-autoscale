@@ -32,13 +32,13 @@ pipeline {
                 echo '⚙️ Running Ansible playbook for node recovery...'
                 sh '''
                     echo "🧩 Installing dependencies..."
-                    sudo apt-get update -y
-                    sudo apt-get install -y curl python3 python3-pip ansible
+                    apt-get update -y
+                    apt-get install -y curl python3 python3-pip ansible
 
                     echo "📦 Installing kubectl..."
                     curl -LO "https://dl.k8s.io/release/$(curl -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
                     chmod +x kubectl
-                    sudo mv kubectl /usr/local/bin/
+                    mv kubectl /usr/local/bin/
 
                     echo "✅ kubectl version:"
                     kubectl version --client
