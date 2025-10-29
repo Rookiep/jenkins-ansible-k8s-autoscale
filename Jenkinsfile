@@ -1,4 +1,4 @@
-pipeline {
+ipeline {
     agent any
 
     stages {
@@ -6,6 +6,13 @@ pipeline {
             steps {
                 echo '🚀 Starting Jenkins CI/CD pipeline for Ansible + Kubernetes...'
                 sh 'pwd && ls -la'
+            }
+        }
+
+        stage('Clean Workspace') {  // NEW: Pre-clone nuke
+            steps {
+                echo '🧹 Cleaning workspace to avoid permission issues...'
+                deleteDir()  // Jenkins built-in: Wipes entire workspace
             }
         }
 
@@ -79,7 +86,7 @@ pipeline {
         stage('Run Ansible Playbook') {
             steps {
                 echo '⚙️ Running Ansible playbook...'
-                dir('ansible') {  // Assumes files are in ./ansible/
+                dir('ansible') {
                     sh '''
                         export KUBECONFIG=~/.kube/config
                         ansible-playbook -i inventory.ini playbook.yml || echo "Playbook completed with warnings."
@@ -97,7 +104,11 @@ pipeline {
             echo '❌ Pipeline failed — please check the logs above.'
         }
         always {
-            sh 'rm -rf ~/.kube || true'  // Cleanup secret
+            sh '''
+                rm -rf ~/.kube /var/jenkins_home/.kube || true
+                # Attempt perm fix if needed (requires sudo? Skip if non-root)
+                # sudo chown -R $(whoami):$(whoami) $WORKSPACE || true
+            '''
         }
     }
 }
