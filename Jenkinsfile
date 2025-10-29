@@ -105,7 +105,7 @@ pipeline {
                     if [ -f "ansible/playbook.yml" ]; then
                         echo "Found Ansible playbook, running in check mode..."
                         cd ansible
-                        ansible-playbook -i inventory.ini playbook.yml --check --syntax-check
+                         ansible-playbook -i ansible/inventory.ini ansible/node_recovery.yml--check --syntax-check
                         echo "Ansible syntax check completed"
                     else
                         echo "No Ansible playbook found, simulating..."
