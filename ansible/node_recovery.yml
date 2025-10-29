@@ -5,9 +5,25 @@
   gather_facts: no
 
   vars:
-    kubeconfig_path: "/home/jenkins/.kube/config"
+    kubeconfig_candidates:
+      - "/home/jenkins/.kube/config"
+      - "~/.kube/config"
 
   tasks:
+    - name: Determine valid kubeconfig path
+      set_fact:
+        kubeconfig_path: "{{ item }}"
+      when: lookup('file', item, errors='ignore') != ''
+      loop: "{{ kubeconfig_candidates }}"
+      run_once: true
+
+    - name: Fail if no kubeconfig file found
+      fail:
+        msg: |
+          ❌ No valid kubeconfig found.
+          💡 Ensure Minikube or Docker Desktop Kubernetes is started.
+      when: kubeconfig_path is not defined
+
     - name: Check Kubernetes cluster status
       shell: kubectl cluster-info --kubeconfig {{ kubeconfig_path }}
       register: cluster_status
@@ -19,12 +35,12 @@
       fail:
         msg: |
           ❌ Cluster unreachable.
-          💡 Run 'minikube start' manually or check kubeconfig.
+          💡 Run 'minikube start' manually or verify kubeconfig at {{ kubeconfig_path }}.
       when: cluster_status.rc != 0
 
     - name: Display successful cluster connection
       debug:
-        msg: "✅ Kubernetes cluster reachable."
+        msg: "✅ Kubernetes cluster reachable using {{ kubeconfig_path }}."
 
     - name: Restart Minikube node
       shell: |
